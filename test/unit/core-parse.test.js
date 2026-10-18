@@ -8,6 +8,11 @@ import {
   hostFingerprint,
   parseInventory,
   parseCreated,
+  parseEnterFailure,
+  parseCursorRecord,
+  parseSubmission,
+  submissionTail,
+  classifySubmission,
 } from '../../lib/core/parse.js';
 
 const GEN = '2893481-1792293185';
@@ -367,4 +372,69 @@ test('parseCreated takes the first created record', () => {
     ['created', '1-2', '$5', '@10', '%13', 'second', 'w2'],
   ]);
   assert.equal(created.sessionName, 'first');
+});
+
+test('C5: submissionTail keeps the last 24 visible characters only', () => {
+  assert.equal(submissionTail('hello world'), 'helloworld');
+  assert.equal(submissionTail(''), '');
+  assert.equal(submissionTail(null), '');
+  const long = `${'pre'.repeat(20)}TAIL_0123456789_abcdef`;
+  assert.equal(submissionTail(long), 'reTAIL_0123456789_abcdef');
+  assert.equal(submissionTail('a\nb\r\nc\td'), 'abcd');
+});
+
+test('C5: parseEnterFailure exposes only known guard codes and sanitized detail', () => {
+  assert.equal(parseEnterFailure([['ok', '%7', '1', '1']]), null);
+  assert.deepEqual(parseEnterFailure([['enterfail', 'TARGET_CHANGED', '']]), { code: 'TARGET_CHANGED' });
+  assert.deepEqual(parseEnterFailure([['enterfail', 'SERVER_RESTARTED', '']]), { code: 'SERVER_RESTARTED' });
+  // An unknown/bogus code is never surfaced raw.
+  assert.deepEqual(parseEnterFailure([['enterfail', 'rm -rf /', '']]), { code: 'OUTCOME_UNKNOWN' });
+  const detail = Buffer.from('can\'t find pane\n\u001b[31mevil\u001b[0m').toString('hex');
+  const parsed = parseEnterFailure([['enterfail', 'TARGET_GONE', detail]]);
+  assert.equal(parsed.code, 'TARGET_GONE');
+  assert.ok(parsed.detail.includes("can't find pane"));
+  assert.equal(parsed.detail.includes('\u001b'), false);
+  assert.deepEqual(parseEnterFailure([['enterfail', 'TARGET_GONE', 'zz']]), { code: 'TARGET_GONE' });
+});
+
+test('C5: parseCursorRecord rejects malformed rows and bounds the payload', () => {
+  const hex = Buffer.from('> pending line').toString('hex');
+  assert.deepEqual(parseCursorRecord([['cursor', hex, '7']]), ['cursor', hex, '7']);
+  assert.equal(parseCursorRecord([['ok', '%7', '1', '1']]), null);
+  assert.equal(parseCursorRecord([['cursor', hex, '-1']]), null);
+  assert.equal(parseCursorRecord([['cursor', hex, 'x']]), null);
+  assert.equal(parseCursorRecord([['cursor', 'zz', '1']]), null);
+  assert.equal(parseCursorRecord([['cursor', '61'.repeat(8193), '1']]), null);
+  assert.equal(parseCursorRecord([]), null);
+});
+
+test('C5: submission is pending only while the text tail is on the cursor row', () => {
+  const hex = (text) => Buffer.from(text).toString('hex');
+  assert.deepEqual(
+    parseSubmission([['cursor', hex('> htop'), '3']], 'htop'),
+    { checked: true, state: 'pending' },
+  );
+  assert.deepEqual(
+    parseSubmission([['cursor', hex('output done'), '3']], 'htop'),
+    { checked: true, state: 'cleared' },
+  );
+  // A cleared input box whose prompt happens to repeat unrelated text stays cleared.
+  assert.equal(parseSubmission([['cursor', hex('$ ls -la'), '3']], 'echo hi').state, 'cleared');
+  // Spaces in the pane row are ignored, matching the visible-tail definition.
+  assert.equal(parseSubmission([['cursor', hex('> h  t  o  p'), '3']], 'htop').state, 'pending');
+});
+
+test('C5: submission is unknown without a usable probe or a visible tail', () => {
+  const hex = (text) => Buffer.from(text).toString('hex');
+  assert.deepEqual(classifySubmission({ text: 'hi', cursor: null }), {
+    checked: false, state: 'unknown', detail: 'cursor line was not captured',
+  });
+  assert.equal(parseSubmission([], 'hi').state, 'unknown');
+  assert.equal(parseSubmission([['cursor', 'nothex', '1']], 'hi').state, 'unknown');
+  const noTail = classifySubmission({ text: '   ', cursor: ['cursor', hex('x'), '1'] });
+  assert.equal(noTail.checked, true);
+  assert.equal(noTail.state, 'cleared', 'whitespace-only text cannot be pending');
+  // ANSI/OSC in a captured row is stripped before matching.
+  const colored = `\u001b[32m> deploy\u001b[0m`;
+  assert.equal(parseSubmission([['cursor', hex(colored), '2']], 'deploy').state, 'pending');
 });
