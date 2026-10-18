@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
-  PROFILE_DOMAIN_PREFIX, USER_DOMAIN, conversationKey, memoryRegistry, openRegistry, registrySpec,
+  PROFILE_DOMAIN_PREFIX, USER_DOMAIN, conversationKey, memoryRegistry, openRegistry, registrySpec, unavailableRegistry,
 } from '../../lib/registry.js';
 import { encodeRef, resourceKey } from '../../lib/core/uri.js';
 
@@ -348,31 +349,92 @@ test('openRegistry uses ctx.storage.domain.open and reports the domain name', as
   assert.equal(opened[1], 'closed');
 });
 
-test('openRegistry profile scope uses a sanitized profile name', async () => {
-  let name;
-  const ctx = {
-    get: (key) => (key === 'profileContext' ? { name: 'Web Profile' } : undefined),
-    storage: { domain: { open: async (spec) => {
-      name = spec.name;
-      return { table: () => ({ get() {}, entries: () => [], put: async () => {}, delete: async () => false, update: async () => {} }), close: async () => {} };
-    } } },
-  };
-  const registry = await openRegistry(ctx, { scope: 'profile' });
-  assert.equal(name, `${PROFILE_DOMAIN_PREFIX}web_profile`);
-  assert.equal(registry.warning, undefined);
+test('profile scope hashes exact identities without folding, truncation or user fallback', async () => {
+  const profiles = [
+    'lab-a', 'lab_a', 'Lab', 'lab', '实验室', '___',
+    `${'x'.repeat(100)}a`, `${'x'.repeat(100)}b`, 'é', 'e\u0301', ' lab', 'lab ',
+  ];
+  const names = [];
+  for (const profile of profiles) {
+    const ctx = {
+      get: (key) => (key === 'profileContext' ? { name: profile } : undefined),
+      storage: { domain: { open: async (spec) => {
+        names.push(spec.name);
+        return { table: () => ({}), close: async () => {} };
+      } } },
+    };
+    const registry = await openRegistry(ctx, { scope: 'profile' });
+    const expected = `${PROFILE_DOMAIN_PREFIX}${createHash('sha256').update(profile, 'utf8').digest('hex')}`;
+    assert.equal(registry.name, expected);
+    assert.equal(names.at(-1), expected);
+    assert.match(registry.name, /^[a-z][a-z0-9_]*$/);
+    assert.notEqual(registry.name, USER_DOMAIN);
+    await registry.close();
+  }
+  assert.equal(new Set(names).size, profiles.length);
 });
 
-test('openRegistry profile scope falls back to user scope with a warning', async () => {
-  let name;
-  const ctx = {
-    storage: { domain: { open: async (spec) => {
-      name = spec.name;
-      return { table: () => ({ get() {}, entries: () => [], put: async () => {}, delete: async () => false, update: async () => {} }), close: async () => {} };
-    } } },
-  };
-  const registry = await openRegistry(ctx, { scope: 'profile' });
-  assert.equal(name, USER_DOMAIN);
-  assert.match(registry.warning, /profile/i);
+test('profile scope rejects missing identity before opening any domain', async () => {
+  let opens = 0;
+  for (const name of [undefined, null, '', 123, '\ud800', '\udfff']) {
+    const ctx = {
+      get: () => name === undefined ? undefined : { name },
+      storage: { domain: { open: async () => { opens += 1; } } },
+    };
+    await assert.rejects(() => openRegistry(ctx, { scope: 'profile' }), { code: 'INVALID_ARGUMENT' });
+  }
+  assert.equal(opens, 0, 'must never silently open the shared user domain');
+});
+
+test('unavailable registry refuses every read/write and permits disposal', async () => {
+  const registry = unavailableRegistry();
+  assert.equal(registry.mode, 'unavailable');
+  for (const [name, method] of Object.entries(registry)) {
+    if (typeof method !== 'function' || name === 'close') continue;
+    assert.throws(() => method(), { code: 'REGISTRY_UNAVAILABLE' }, name);
+  }
+  await registry.close();
+  await registry.close();
+});
+
+test('persistent open errors propagate rather than substituting an empty registry', async () => {
+  for (const message of ['invalid record', 'incompatible version', 'already-open']) {
+    const error = new Error(message);
+    const ctx = { storageDomain: { open: async () => { throw error; } } };
+    await assert.rejects(() => openRegistry(ctx), (actual) => actual === error);
+  }
+});
+
+test('close drains queued writes, shares settlement and refuses new work', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let writes = 0;
+  let closes = 0;
+  const table = { get() {}, async put() { await gate; writes += 1; } };
+  const registry = await openRegistry({ storageDomain: { open: async () => ({
+    table: () => table,
+    async close() { assert.equal(writes, 1); closes += 1; },
+  }) } });
+  const writing = registry.hostPin(HOST, { fp: FP });
+  const closing = registry.close();
+  assert.equal(registry.close(), closing);
+  assert.equal(closes, 0);
+  await assert.rejects(() => registry.hostPin('other', { fp: FP }), { code: 'REGISTRY_UNAVAILABLE' });
+  assert.throws(() => registry.hostGet(HOST), { code: 'REGISTRY_UNAVAILABLE' });
+  release();
+  await writing;
+  await closing;
+  assert.equal(closes, 1);
+});
+
+test('an opened domain is closed if obtaining its tables fails', async () => {
+  let closed = 0;
+  const failure = new Error('table unavailable');
+  await assert.rejects(() => openRegistry({ storageDomain: { open: async () => ({
+    table() { throw failure; },
+    async close() { closed += 1; },
+  }) } }), (error) => error === failure);
+  assert.equal(closed, 1);
 });
 
 test('openRegistry rejects a missing facility and a bad scope', async () => {

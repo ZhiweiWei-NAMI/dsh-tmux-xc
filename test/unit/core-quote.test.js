@@ -4,6 +4,9 @@ import assert from 'node:assert/strict';
 import { XcError, CODES } from '../../lib/core/errors.js';
 import {
   shQuote,
+  escapeTmuxFormat,
+  SOCKET_ID_RE,
+  validateSocketId,
   validateAlias,
   validateHostId,
   validateSessionName,
@@ -105,6 +108,29 @@ test('validateHostId enforces the config key grammar', () => {
   for (const id of ['', 'NaMILab', '-a', 'a b', 'a.b', 'a'.repeat(33)]) {
     assertInvalid(() => validateHostId(id));
   }
+});
+
+test('validateSocketId matches reference grammar, not the broader socket-name grammar', () => {
+  for (const id of ['default', 'lab-1', 'a_b', 'a'.repeat(32)]) {
+    assert.equal(validateSocketId(id), id);
+    assert.ok(SOCKET_ID_RE.test(id));
+  }
+  for (const id of ['', 'Lab', 'lab.logs', '-lab', 'a'.repeat(33), null]) {
+    assertInvalid(() => validateSocketId(id));
+  }
+  assert.equal(validateSocketName('Lab.logs'), 'Lab.logs');
+});
+
+test('RV1-01: format escaping doubles every hash before POSIX quoting', () => {
+  for (const [input, escaped] of [
+    ['#(touch marker)/tmp', '##(touch marker)/tmp'],
+    ['#{pane_id}', '##{pane_id}'], ['/tmp/hash#name', '/tmp/hash##name'], ['##', '####'],
+  ]) {
+    assert.equal(escapeTmuxFormat(input), escaped);
+    assert.equal(shQuote(escapeTmuxFormat(input)), shQuote(escaped));
+  }
+  assertInvalid(() => escapeTmuxFormat('a\0b'));
+  assertInvalid(() => escapeTmuxFormat(null));
 });
 
 test('validateSessionName enforces 1..64 safe characters', () => {

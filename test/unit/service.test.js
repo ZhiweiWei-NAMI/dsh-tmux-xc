@@ -4,10 +4,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TmuxXcService } from '../../lib/service.js';
+import { TmuxXcService, approvalPreview } from '../../lib/service.js';
 import { memoryRegistry } from '../../lib/registry.js';
 import { hostFingerprint } from '../../lib/core/parse.js';
-import { encodeRef } from '../../lib/core/uri.js';
+import { encodeRef, decodeRef, formatToken } from '../../lib/core/uri.js';
 import { XcError, CODES } from '../../lib/core/errors.js';
 
 const CFG = {
@@ -206,7 +206,7 @@ for (const transportMode of [undefined, 'ssh', 'local']) {
     assert.ok(transport.calls.some((call) => call.script.includes('capture-pane') && !call.mutating));
     assert.equal(transport.calls.filter((call) => call.mutating).length, 4);
     for (const call of transport.calls) assert.equal(call.host, transport.calls[0].host);
-    assert.deepEqual(service.hosts(), [{ id: 'namilab', label: 'namilab', sockets: [{ id: 'default' }] }]);
+    assert.deepEqual(service.hosts(), [{ id: 'namilab', label: 'namilab', transport: transportMode ?? 'ssh', ...(transportMode === 'local' ? {} : { ssh: 'NaMILab' }), sockets: [{ id: 'default' }] }]);
     assert.equal(configuredHost.transport, transportMode, 'normalizing must not mutate config');
     assert.equal(configuredHost.sockets, undefined);
   });
@@ -254,7 +254,7 @@ for (const code of TRANSPORT_CODES) {
 
     const { hosts } = await service.inventory();
     assert.deepEqual(hosts, [{
-      id: 'namilab', label: 'NaMILab', reachable: false, status: 'unreachable', sockets: [],
+      id: 'namilab', label: 'NaMILab', reachable: false, status: 'unreachable', verifiedAt: null, sockets: [],
       error: { code, message: error.message },
     }]);
     assert.deepEqual(registryCalls.markUnreachable, [['namilab', error, 1234567890]]);
@@ -292,10 +292,10 @@ for (const code of NON_TRANSPORT_CODES) {
     assert.equal(hosts[0].reachable, false, 'legacy flag continues to mean inventory success');
     assert.equal(hosts[0].status, 'error');
     assert.deepEqual(hosts[0].error, { code, message: error.message });
-    assert.equal(hosts[0].verifiedAt, undefined);
+    assert.equal(hosts[0].verifiedAt, null);
     assert.deepEqual(registryCalls.markUnreachable, []);
     assert.deepEqual(registryCalls.markVerified, []);
-    assert.deepEqual(await registry.resourceGet(adopted.key), adopted);
+    assert.equal((await registry.resourceGet(adopted.key)).uri, adopted.uri);
   });
 }
 
@@ -504,7 +504,7 @@ for (const kind of ['session', 'window', 'pane']) {
     assert.equal(entry.kind, kind);
     assert.equal(entry.origin, 'created');
     assert.equal(entry.gen, GEN);
-    assert.deepEqual(await registry.resourceGet(entry.key), entry);
+    assert.equal((await registry.resourceGet(entry.key)).uri, entry.uri);
     assert.equal(transport.calls.filter((call) => call.mutating).length, 1);
   });
 }
@@ -550,4 +550,249 @@ test('send validates text size, keys and requires payload', async () => {
   await assert.rejects(service.send({ uri: ref(), text: 'x'.repeat(20000) }), (error) => error.code === CODES.INVALID_ARGUMENT);
   await assert.rejects(service.send({ uri: ref(), keys: ['NotAKey'] }), (error) => error.code === CODES.INVALID_ARGUMENT);
   await assert.rejects(service.send({ uri: ref() }), (error) => error.code === CODES.INVALID_ARGUMENT);
+});
+
+
+test('approval pins the exact sole pane selected from a session', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  const uri = ref({ kind: 'session', wid: null, pid: null });
+  const { identity, en, zh } = await service.describeForApproval('tmux_xc_send', {
+    ref: uri, text: 'line\n\t\x1b', enter: true, keys: ['C-c'],
+  });
+  assert.equal(identity.kind, 'pane');
+  assert.equal(identity.pid, 7);
+  assert.match(en, /Send input/);
+  assert.match(en, /enter true/);
+  assert.match(zh, /追加回车 是/);
+  transport.state.inventory = () => [hostRecord(), paneRecord({ pid: 8 })];
+  await assert.rejects(service.send({ uri, text: 'x', approvalIdentity: identity }), { code: 'TARGET_CHANGED' });
+  assert.equal(transport.calls.some((call) => call.mutating), false);
+});
+
+test('approval pins ancestry for detach and create parents', async () => {
+  for (const operation of ['detach', 'create']) {
+    const transport = makeTransport();
+    const { service } = makeService(transport);
+    const args = operation === 'detach' ? { ref: ref() } : { hostId: 'namilab', kind: 'pane', parentRef: ref(), cwd: '/tmp' };
+    const { identity } = await service.describeForApproval(`tmux_xc_${operation}`, args);
+    transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 4, wid: 6 })];
+    await assert.rejects(operation === 'detach'
+      ? service.detach({ uri: ref(), approvalIdentity: identity })
+      : service.create({ ...args, parentUri: args.parentRef, by: { sessionId: 'a' }, approvalIdentity: identity }),
+    { code: 'TARGET_CHANGED' });
+    assert.equal(transport.calls.some((call) => call.mutating), false);
+  }
+});
+
+test('kill approval refuses a relocated pane before any destructive script', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  const { identity } = await service.describeForApproval('tmux_xc_kill', { ref: ref(), confirm: 'namilab:default:%7' });
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 4 })];
+  await assert.rejects(service.kill({ uri: ref(), confirm: 'namilab:default:%7', approvalIdentity: identity }), { code: 'TARGET_CHANGED' });
+  assert.equal(transport.calls.some((call) => call.mutating), false);
+});
+
+for (const initialServer of [true, false]) {
+  test(`session create approval refuses changed server (initial server: ${initialServer})`, async () => {
+    const transport = makeTransport();
+    if (!initialServer) transport.state.inventory = () => [hostRecord(), ['noserver']];
+    const { service } = makeService(transport);
+    const { identity } = await service.describeForApproval('tmux_xc_create', { hostId: 'namilab', kind: 'session', name: 'new' });
+    transport.state.inventory = () => {
+      const pane = paneRecord(); pane[1] = '9999-9999';
+      return [hostRecord(), pane];
+    };
+    await assert.rejects(service.create({ hostId: 'namilab', kind: 'session', name: 'new', approvalIdentity: identity }), { code: 'TARGET_CHANGED' });
+    assert.equal(transport.calls.some((call) => call.mutating), false);
+  });
+}
+
+test('unchanged approved send guards the exact pane rather than its session', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  const uri = ref({ kind: 'session', wid: null, pid: null });
+  const { identity } = await service.describeForApproval('tmux_xc_send', { ref: uri, enter: true });
+  await service.send({ uri, enter: true, approvalIdentity: identity });
+  const call = transport.calls.find((call) => call.mutating);
+  assert.match(call.script, /%7/);
+  assert.match(call.script, /if-shell/);
+});
+
+test('create never substitutes the generation from its metadata reread', async () => {
+  const transport = makeTransport();
+  transport.state.created = [['created', GEN, '$3', '@5', '%7', 'train', 'train']];
+  let inventories = 0;
+  transport.state.inventory = () => {
+    const pane = paneRecord();
+    if (++inventories > 1) pane[1] = '9999-9999';
+    return [hostRecord(), pane];
+  };
+  const { service, registry } = makeService(transport);
+  await assert.rejects(service.create({ hostId: 'namilab', kind: 'session', name: 'train', by: { sessionId: 'a' } }), { code: 'SERVER_RESTARTED' });
+  assert.deepEqual(await registry.resourceList({ all: true }), []);
+});
+
+test('URI adoption rejects a restarted generation without registering its reused id', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => {
+    const pane = paneRecord(); pane[1] = '9999-9999';
+    return [hostRecord(), pane];
+  };
+  const { service, registry } = makeService(transport);
+  await assert.rejects(service.adopt({ target: ref(), by: { sessionId: 'a' } }), { code: 'SERVER_RESTARTED' });
+  assert.deepEqual(await registry.resourceList({ all: true }), []);
+});
+
+test('inventory and adoption use one full canonical label and token', async () => {
+  const { service } = makeService(makeTransport());
+  const { hosts } = await service.inventory();
+  const pane = hosts[0].sockets[0].sessions[0].windows[0].panes[0];
+  const entry = await service.adopt({ target: pane.uri, by: { sessionId: 'a' } });
+  assert.equal(entry.uri, pane.uri);
+  assert.equal(entry.label, 'NaMILab · train:0.0 %7');
+  assert.equal(entry.token, formatToken(entry.label, entry.uri));
+  assert.equal(entry.token, pane.token);
+  assert.equal(entry.label, pane.label);
+  assert.equal(decodeRef(entry.uri).gen, GEN);
+});
+
+test('approval preview exposes every control byte and exact truncation', () => {
+  assert.equal(approvalPreview('a\n\t\x1b\x00\\"'), '"a\\n\\t\\x1b\\x00\\\\\\""');
+  assert.equal(approvalPreview('中ab', 'en', 3), '"中" (+2 more bytes)');
+  assert.equal(approvalPreview('中ab', 'zh', 3), '"中"（另有 2 字节）');
+});
+
+test('approval displays executable suffixes beyond the short preview budget', async () => {
+  const { service } = makeService(makeTransport());
+  const payload = 'x'.repeat(1500) + '\ncommand\t\x1b';
+  const { en, zh } = await service.describeForApproval('tmux_xc_send', { ref: ref(), text: payload });
+  for (const text of [en, zh]) assert.ok(text.includes('\\ncommand\\t\\x1b'));
+});
+
+test('create approval names the parent, effective cwd, operation, and current names', async () => {
+  const { service } = makeService(makeTransport());
+  const result = await service.describeForApproval('tmux_xc_create', { hostId: 'namilab', kind: 'pane', parentRef: ref(), cwd: '/tmp/#(literal)' });
+  for (const text of [result.en, result.zh]) {
+    assert.ok(text.includes('$3 @5 %7'));
+    assert.ok(text.includes('train'));
+    assert.ok(text.includes('/tmp/#(literal)'));
+    assert.ok(text.includes('NaMILab'));
+  }
+  assert.match(result.zh, /创建窗格/);
+  assert.doesNotMatch(result.zh, /parent|cwd|named|horizontal|true|false/);
+});
+
+test('configured default cwd is applied and hash-escaped, explicit cwd overrides', async () => {
+  const host = { ...CFG.hosts[0], transport: 'ssh', newSession: { cwd: '/tmp/#(literal)' } };
+  const transport = makeTransport(host);
+  transport.state.created = [['created', GEN, '$3', '@5', '%7', 'train', 'train']];
+  const { service } = makeService(transport, { config: { ...CFG, hosts: [host] } });
+  await service.create({ hostId: 'namilab', kind: 'session', name: 'train', by: { sessionId: 'a' } });
+  assert.ok(transport.calls.find((call) => call.mutating).script.includes('/tmp/##(literal)'));
+  transport.calls.length = 0;
+  await service.create({ hostId: 'namilab', kind: 'session', name: 'train', cwd: '/explicit', by: { sessionId: 'a' } });
+  assert.ok(transport.calls.find((call) => call.mutating).script.includes('/explicit'));
+});
+
+test('all service values used as tool outputs contain no undefined properties', async () => {
+  const transport = makeTransport();
+  transport.state.created = [['created', GEN, '$3', '@5', '%7', 'train', 'train']];
+  const { service } = makeService(transport);
+  const values = [
+    service.hosts(), await service.inventory(),
+    await service.adopt({ target: ref() }),
+    await service.create({ hostId: 'namilab', kind: 'session', name: 'train' }),
+    await service.capture({ uri: ref() }), await service.send({ uri: ref(), enter: true }),
+    await service.detach({ uri: ref() }), await service.kill({ uri: ref(), confirm: 'namilab:default:%7' }),
+  ];
+  const check = (value) => {
+    assert.notEqual(value, undefined);
+    if (value && typeof value === 'object') for (const child of Object.values(value)) check(child);
+  };
+  values.forEach(check);
+});
+
+test('hosts preserves configured attach selectors and omits ssh for local transport', () => {
+  const config = { ...CFG, hosts: [
+    { id: 'remote', label: 'Remote', ssh: 'RemoteAlias', sockets: [{ id: 'named', name: 'Lab.logs' }, { id: 'path', path: '/tmp/lab socket' }] },
+    { id: 'local', transport: 'local', sockets: [{ id: 'default' }] },
+  ] };
+  const { service } = makeService(makeTransport(), { config });
+  assert.deepEqual(service.hosts(), [
+    { id: 'remote', label: 'Remote', transport: 'ssh', ssh: 'RemoteAlias', sockets: config.hosts[0].sockets },
+    { id: 'local', label: 'local', transport: 'local', sockets: [{ id: 'default' }] },
+  ]);
+});
+
+test('capture propagates remote byte truncation even when decoded output fits', async () => {
+  const base = makeTransport();
+  const transport = { async runRemote(args) {
+    if (args.script.includes('capture-pane')) {
+      assert.match(args.script, /65536/);
+      return { records: [['capture', Buffer.from('newest').toString('hex'), '1']] };
+    }
+    return base.runRemote(args);
+  } };
+  const { service } = makeService(transport);
+  assert.equal((await service.capture({ uri: ref() })).truncated, true);
+});
+
+test('close waits for registry continuations after the transport has finished', async () => {
+  const registry = memoryRegistry();
+  const original = registry.resourceUpsert.bind(registry);
+  let release, started;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const ready = new Promise((resolve) => { started = resolve; });
+  registry.resourceUpsert = async (entry) => { started(); await gate; return original(entry); };
+  const { service } = makeService(makeTransport(), { registry });
+  const adopting = service.adopt({ target: ref() });
+  await ready;
+  let closed = false;
+  const closing = service.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  release();
+  await adopting;
+  await closing;
+  assert.equal((await registry.resourceList({ all: true })).length, 1);
+});
+
+test('long unsafe labels remain identical in inventory, adoption, and tokens', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sname: '[unsafe](label)`' + 'x'.repeat(150) })];
+  const { service } = makeService(transport);
+  const pane = (await service.inventory()).hosts[0].sockets[0].sessions[0].windows[0].panes[0];
+  const entry = await service.adopt({ target: pane.uri });
+  assert.equal(entry.label, pane.label);
+  assert.equal(entry.token, pane.token);
+  assert.ok(Array.from(entry.label).length <= 80);
+  assert.doesNotMatch(entry.label, /[\[\]()`]/);
+});
+
+test('close aborts and settles complete in-flight operations before returning', async () => {
+  let started, finish;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const drained = new Promise((resolve) => { finish = resolve; });
+  let aborted = false;
+  const transport = { async runRemote({ signal }) {
+    started();
+    signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+    await drained;
+    throw new XcError(CODES.CANCELLED, 'aborted');
+  } };
+  const { service } = makeService(transport);
+  const operation = service.resolveRef(ref());
+  const rejected = assert.rejects(operation, { code: 'CANCELLED' });
+  await ready;
+  let closed = false;
+  const closing = service.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(aborted, true);
+  assert.equal(closed, false);
+  finish();
+  await closing;
+  await rejected;
+  await assert.rejects(service.resolveRef(ref()), { code: 'CANCELLED' });
 });
