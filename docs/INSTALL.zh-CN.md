@@ -84,7 +84,7 @@ dsh plugin --profile <profile> add /abs/path/dsh-tmux-xc-0.1.1.tgz
 
 ## 3. 配置
 
-编辑 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（Windows 为 `%USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml`），加入配置块。配置键由插件 schema 校验，完整说明见 [README.zh-CN.md](../README.zh-CN.md) 的「配置」。
+编辑 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`（Windows 为 `%USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml`），加入配置块。配置键由插件 schema 校验，完整字段说明见本文下方的配置示例与说明，以及 [USAGE.zh-CN.md](USAGE.zh-CN.md)。
 
 ### 3.1 最小配置（一个 SSH 主机，默认 socket）
 

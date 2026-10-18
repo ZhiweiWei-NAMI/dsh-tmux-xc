@@ -2,7 +2,7 @@
 
 ## Summary — accepted with scoped qualifications
 
-> **0.1.1 released 2026-10-18 to [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag `v0.1.1`.** Runtime `lib/` is identical to the independently accepted baseline `c600ece`. Independent SOL clicks verified the fixes; ASTRA checked the evidence and diff. Acceptance remains scoped to the observations below.
+> **0.1.1 (2026-10-18) — distribution: [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag `v0.1.1`.** Runtime `lib/` is identical to the independently accepted baseline `c600ece`. Independent SOL clicks verified the fixes; ASTRA checked the evidence and diff. Acceptance remains scoped to the observations below.
 >
 > - The unified task tree exposes child task names, including the developer task. Plugin-created targets register automatically; other targets need adoption for registration.
 > - Copy commands target the selected resource. SSH aliases/config must exist on your connecting machine; local Bash runs on the tmux machine. Local PowerShell is disabled; Windows remains unverified.
@@ -19,7 +19,7 @@ The release commit changes **presentation only**: READMEs, screenshots, document
 
 **Accepted baseline.** `dsh-tmux-xc` **0.1.1**, branch `v011-int`, commit **`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`** = `1ee6f78` + lane A `802b872` + lane B `b55b75d`. The manager installed and restarted the pre-marketing package; independent SOL verified all **15 installed `lib` files** against `git show c600ece:lib/...` byte-for-byte.
 
-**Do not confuse the artifacts.** SHA-1 **`b39fe0019ebffd6aeb49a78b7f86362bf72dea07`** identifies the accepted **pre-marketing tarball**, **not** the published tarball. The published package includes updated documentation. Its digest is npm's **`dist.shasum`** in the [0.1.1 registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1), also recorded on the [GitHub release](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1). Version alone does not identify the evaluated artifact.
+**Do not confuse the artifacts.** SHA-1 **`b39fe0019ebffd6aeb49a78b7f86362bf72dea07`** identifies the accepted **pre-marketing tarball**, **not** the published tarball. The published package includes updated documentation. Its digest is npm's **`dist.shasum`** in the [0.1.1 registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1). Version alone does not identify the evaluated artifact.
 
 ## Runtime acceptance — 0.1.1 at `c600ece`
 

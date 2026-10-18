@@ -4,11 +4,11 @@ All notable changes to **dsh-tmux-xc**. Versions follow the plugin's `package.js
 
 ## 0.1.1 — 2026-10-18
 
-Released to [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag **`v0.1.1`**.
+Distribution: [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag **`v0.1.1`**.
 
 **Runtime unchanged:** `lib/` is identical to the independently accepted baseline **`c600ece`** (`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`). The release commit changes presentation only: READMEs, screenshots, documentation, and package discovery metadata. Independent SOL hands-on checks and ASTRA evidence/source review establish the scope recorded in [TEST-RESULTS.md](TEST-RESULTS.md).
 
-**Artifact identity:** SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07` identifies the accepted **pre-marketing tarball**, not the published artifact. For the published tarball digest, use npm's **`dist.shasum`** in the [version registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1), also recorded on the GitHub release. Documentation changes mean the two tarballs are not interchangeable.
+**Artifact identity:** SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07` identifies the accepted **pre-marketing tarball**, not the published artifact. For the published tarball digest, use npm's **`dist.shasum`** in the [version registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1). Documentation changes mean the two tarballs are not interchangeable.
 
 An earlier 0.1.1 candidate at `1ee6f78` failed submission and sent-history navigation; it was not accepted. The fixes below belong to the accepted runtime, not a claim that every earlier 0.1.1 build passed.
 
