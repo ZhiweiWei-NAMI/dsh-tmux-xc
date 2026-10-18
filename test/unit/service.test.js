@@ -1037,6 +1037,70 @@ test('inventory decorates config alias hints and a local alias wins for its exac
   assert.equal(pane.aliasSource, 'local');
 });
 
+test('inventory prefers window-specific config hints regardless of order', async (t) => {
+  const hints = [
+    { session: 'train', alias: 'Session fallback' },
+    { session: 'train', window: 'train', alias: 'Window alias' },
+    { session: 'other', window: 'other', alias: 'Unrelated session' },
+  ];
+  for (const aliases of [hints, [...hints].reverse()]) {
+    const host = { ...CFG.hosts[0], aliases };
+    const transport = makeTransport({ ...host, transport: 'ssh', newSession: {} });
+    transport.state.inventory = () => [
+      hostRecord(), paneRecord(), paneRecord({ wid: 6, wname: 'other', windex: 1, wactive: '0', pid: 8 }),
+    ];
+    const { service } = makeService(transport, { config: { ...CFG, hosts: [host] } });
+    t.after(() => service.close());
+    const { hosts } = await service.inventory();
+    const session = hosts[0].sockets[0].sessions[0];
+    assert.equal(session.alias, 'Session fallback');
+    for (const window of session.windows) {
+      const expected = window.name === 'train' ? 'Window alias' : 'Session fallback';
+      assert.equal(window.alias, expected);
+      assert.equal(window.aliasSource, 'config');
+      assert.equal(window.panes[0].alias, expected);
+      assert.equal(window.panes[0].aliasSource, 'config');
+    }
+  }
+});
+
+test('inventory alias lookup is best-effort in the service', async (t) => {
+  for (const mode of ['missing method', 'throws', 'rejects', 'logger throws']) {
+    await t.test(mode, async (t) => {
+      const transport = makeTransport();
+      const { service, registry } = makeService(transport);
+      t.after(() => service.close());
+      const error = new Error('aliases unavailable');
+      const messages = [];
+      let lookups = 0;
+      registry.aliasList = mode === 'missing method' ? undefined : () => {
+        lookups += 1;
+        if (mode === 'rejects') return Promise.reject(error);
+        throw error;
+      };
+      service.logger = { debug(message) {
+        messages.push(message);
+        if (mode === 'logger throws') throw new Error('logger unavailable');
+      } };
+
+      const { hosts } = await service.inventory();
+      assert.equal(hosts.length, 1);
+      assert.equal(hosts[0].status, 'ok');
+      assert.equal(hosts[0].reachable, true);
+      const session = hosts[0].sockets[0].sessions[0];
+      const window = session.windows[0];
+      const pane = window.panes[0];
+      for (const node of [session, window, pane]) {
+        assert.equal(Object.hasOwn(node, 'alias'), false);
+        assert.equal(Object.hasOwn(node, 'aliasSource'), false);
+      }
+      assert.equal(lookups, mode === 'missing method' ? 0 : 1);
+      assert.equal(messages.length, mode === 'missing method' ? 0 : 1);
+      if (messages.length > 0) assert.ok(messages[0].includes(error.message));
+    });
+  }
+});
+
 test('service.alias adopts a not-yet-registered uri before setting its alias', async () => {
   const transport = makeTransport();
   const { service, registry } = makeService(transport);

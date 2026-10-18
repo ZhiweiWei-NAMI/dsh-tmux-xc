@@ -93,25 +93,34 @@ test('switch ON (default) asks all four actions and names the policy key', async
   assert.ok(send.displayReason.zh.includes('“send”'), send.displayReason.zh);
 });
 
-test('switch precedence: panel enabled wins over config enabled and legacy per-key allow', async () => {
-  let stored = { approval: { enabled: false } };
-  const registry = { getSettings: async () => ({ approval: { ...stored.approval } }) };
-  const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(registry), { approval: { enabled: true, create: 'allow' } });
-  const listener = preExecute(listeners);
-  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow', 'panel OFF beats config ON');
-  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'allow', 'kill follows the panel OFF switch');
+test('switch precedence: stored panel boolean wins for all four actions over config and legacy allow', async () => {
+  const actions = ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_kill', 'tmux_xc_detach'];
+  for (const configured of [true, false]) {
+    let stored = {};
+    const registry = { getSettings: async () => ({ approval: { ...stored.approval } }) };
+    const { ctx, listeners } = fakeCtx();
+    registerTools(ctx, fakeService(registry), {
+      approval: { enabled: configured, create: 'allow', send: 'allow', detach: 'allow' },
+    });
+    const listener = preExecute(listeners);
 
-  stored = { approval: { enabled: true } };
-  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'ask', 'panel ON beats legacy allow');
-  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'ask', 'panel ON asks kill');
+    for (const enabled of [false, true]) {
+      stored = { approval: { enabled } };
+      for (const name of actions) {
+        assert.equal((await listener(exec(name), allow)).kind, enabled ? 'ask' : 'allow',
+          `${name}: panel ${enabled} overrides config ${configured} and legacy allow`);
+      }
+    }
 
-  stored = { approval: { enabled: null } };
-  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow', 'cleared panel falls back to config legacy allow');
-  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'ask', 'cleared panel falls back to config ON for kill');
-
-  stored = {};
-  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask', 'no panel override, no legacy key -> ask');
+    for (const settings of [{ approval: { enabled: null } }, {}]) {
+      stored = settings;
+      for (const name of actions) {
+        const expected = configured && name === 'tmux_xc_kill' ? 'ask' : 'allow';
+        assert.equal((await listener(exec(name), allow)).kind, expected,
+          `${name}: cleared or absent panel falls back to config ${configured} and legacy allow`);
+      }
+    }
+  }
 });
 
 test('legacy per-key allow is honoured only for that key when the switch is on', async () => {

@@ -17,13 +17,13 @@ test('Config retains local transport and every DESIGN §3 host/socket/session fi
     sockets: [{ id: 'default' }, { id: 'xc', name: 'xc' }, { id: 'lab', path: '/tmp/tmux-lab/sock' }],
     newSession: { command: ['bash', '-l'], cwd: '/workspace' },
   };
-  assert.deepEqual(config({ hosts: [host] }).hosts, [host]);
+  assert.deepEqual(config({ hosts: [host] }).hosts, [{ ...host, aliases: [] }]);
 });
 
 test('Config defaults transport to ssh and retains host defaults', () => {
   assert.deepEqual(config({ hosts: [{ id: 'remote', ssh: 'user@alias' }] }).hosts, [{
     id: 'remote', ssh: 'user@alias', transport: 'ssh',
-    sockets: [{ id: 'default' }], newSession: { command: [], cwd: '' },
+    sockets: [{ id: 'default' }], newSession: { command: [], cwd: '' }, aliases: [],
   }]);
 });
 
@@ -57,9 +57,10 @@ test('Config approval switch accepts explicit enabled and leaves deprecated keys
   assert.equal(Object.hasOwn(parsed.approval, 'create'), false);
   assert.equal(Object.hasOwn(parsed.approval, 'send'), false);
   assert.equal(Object.hasOwn(parsed.approval, 'detach'), false);
-  const legacy = config({ approval: { create: 'allow' } }).approval;
-  assert.deepEqual(legacy, { enabled: true, create: 'allow' });
-  for (const bad of [{ enabled: 'yes' }, { create: 'maybe' }, { kill: 'allow' }]) {
+  assert.equal(Object.hasOwn(parsed.approval, 'kill'), false);
+  const legacy = config({ approval: { create: 'allow', send: 'ask', detach: 'allow' } }).approval;
+  assert.deepEqual(legacy, { enabled: true, create: 'allow', send: 'ask', detach: 'allow' });
+  for (const bad of [{ enabled: 'yes' }, { create: 'maybe' }, { kill: 'allow' }, { kill: 'ask' }, { kill: true }, { kill: false }]) {
     assert.ok(Config['~standard'].validate({ approval: bad }).issues, JSON.stringify(bad));
   }
 });
@@ -161,43 +162,6 @@ test('inventory route preserves host error codes and reports thrown internal err
   assert.equal(body.error.code, 'INTERNAL');
   assert.ok(body.error.message.includes(internal.message));
   assert.equal(body.hosts, undefined, 'an internal exception is not a host status');
-});
-
-test('inventory alias lookup is best-effort', async (t) => {
-  for (const mode of ['missing method', 'throws', 'rejects', 'logger throws']) {
-    await t.test(mode, async (t) => {
-      const scope = connectionScope();
-      const pane = { key: 'pane-key', label: 'Pane' };
-      const host = { id: 'local', status: 'ok', reachable: true,
-        sockets: [{ sessions: [{ windows: [{ panes: [pane] }] }] }] };
-      const error = new Error('aliases unavailable');
-      const messages = [];
-      const registry = mode === 'missing method' ? {} : {
-        aliasList() {
-          if (mode === 'rejects') return Promise.reject(error);
-          throw error;
-        },
-      };
-      t.after(registerRoutes(scope.ctx, {
-        registry,
-        logger: { debug(message) {
-          messages.push(message);
-          if (mode === 'logger throws') throw new Error('logger unavailable');
-        } },
-        async inventory() { return { hosts: [host] }; },
-      }));
-      const response = await scope.routes.get('/api/tmux-xc/inventory')
-        .fetch(new Request('http://localhost/api/tmux-xc/inventory'));
-      assert.equal(response.status, 200);
-      const { reachable, ...routeHost } = host;
-      assert.deepEqual(await response.json(), { ok: true, hosts: [routeHost] });
-      assert.equal(Object.hasOwn(pane, 'alias'), false);
-      if (mode !== 'missing method') {
-        assert.equal(messages.length, 1);
-        assert.ok(messages[0].includes(error.message));
-      }
-    });
-  }
 });
 
 test('apply registers routes when connection appears later and returns scoped cleanup', async (t) => {
