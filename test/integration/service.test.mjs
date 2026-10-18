@@ -264,7 +264,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 300000 }, () => {
 
       const text = "hello 你好 🌏 $(id) `x` 'q'"
       const sent = await service.send({ uri: pane.uri, text, enter: false })
-      assert.equal(sent.delivered, true)
+      assert.deepEqual(sent.delivered, { text: true, keys: 0, enter: false })
       await waitForPaneText(ctx.socketName, `%${paneId}`, text, 5000)
       const captured = capturePane(ctx.socketName, `%${paneId}`)
       // Literal delivery: no command substitution or backtick expansion happened.
@@ -272,7 +272,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 300000 }, () => {
       assert.ok(!/uid=\d+/.test(captured), 'no shell expansion of $(id)')
 
       const withEnter = await service.send({ uri: pane.uri, text: 'line-two', enter: true })
-      assert.equal(withEnter.delivered, true)
+      assert.equal(withEnter.delivered.enter, true)
       await waitForPaneText(ctx.socketName, `%${paneId}`, 'line-two', 5000)
 
       await rejectsWithCode(
@@ -282,7 +282,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 300000 }, () => {
       )
 
       const keyed = await service.send({ uri: pane.uri, keys: ['C-c'] })
-      assert.equal(keyed.delivered, true)
+      assert.equal(keyed.delivered.keys, 1)
     } finally {
       await service.close?.()
     }

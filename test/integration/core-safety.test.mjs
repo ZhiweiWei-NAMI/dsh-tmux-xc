@@ -93,7 +93,11 @@ describe('RV1 core safety (real tmux parser and isolated socket)', { skip, timeo
     localTmux(ctx.socketName, 'set-window-option', '-t', target, 'remain-on-exit', 'on')
     localTmux(ctx.socketName, 'send-keys', '-t', target, 'C-d')
     await waitFor(() => localTmux(ctx.socketName, 'display-message', '-p', '-t', target, '#{pane_dead}') === '1')
-    await rejectsWithCode(remote(ctx, 'sendScript', expect, { enter: true }), 'PANE_DEAD')
+    // C5: the Enter step's guard refusal is an `enterfail` record (never `err`), so the
+    // service can report exactly what was delivered; nothing reached the dead pane.
+    const { records } = await remote(ctx, 'sendScript', expect, { enter: true })
+    const { parseEnterFailure } = await core('parse')
+    assert.equal(parseEnterFailure(records)?.code, 'PANE_DEAD')
   })
 
   it('RV1-04: stale generation and ancestry cannot redirect queued actions', async (t) => {
