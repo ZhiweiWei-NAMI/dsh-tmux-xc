@@ -87,8 +87,12 @@ test('complete scripts frame begin/end and probe tools without changing user opt
 
 test('inventory framing, fields, missing-server classification and UTF-8 invocation', () => {
   const script = inventoryScript(NONCE, SOCKET);
-  const parsed = parseRecords(literalRecords(script), NONCE);
+  // Inspect the early-return path only: the normal footer after `fi` is a
+  // different branch, not a second footer emitted on a missing-server run.
+  const failureEnd = script.indexOf('\nfi', script.indexOf('if [ "$rc" -ne 0 ]'));
+  const parsed = parseRecords(literalRecords(script.slice(0, failureEnd)), NONCE);
   assert.deepEqual(parsed.records, [['begin'], ['noserver'], ['end']]);
+  assert.deepEqual(parseRecords(literalRecords(script.slice(failureEnd)), NONCE).records, [['end']]);
   for (const field of [
     'pid', 'start_time', 'socket_path', 'session_id', 'session_name', 'session_created',
     'session_attached', 'window_id', 'window_index', 'window_name', 'window_active',
@@ -116,6 +120,7 @@ test('RV1-04: guard and ALL actions share one synchronous bound tmux client', ()
     assert.ok(script.includes('SERVER_RESTARTED'));
     assert.ok(script.includes('TARGET_CHANGED'));
     assert.ok(script.includes('TARGET_GONE'));
+    assert.ok(script.includes('REMOTE_ERROR'));
     assert.ok(script.includes('rc=$?'));
     assert.ok(script.includes('if [ "$rc" -ne 0 ]'));
     assert.equal(script.includes('if-shell -b'), false);
@@ -148,7 +153,7 @@ test('RV1-02: send atomically refuses synchronization, copy mode, dead and input
 });
 
 test('RV1-08: success marker follows all queued actions and failure stops at checked status', () => {
-  for (const builder of [sendScript, detachScript, (n, s, e) => killScript(n, s, e, 'pane')]) {
+  for (const builder of [sendScript, detachScript]) {
     const script = readable(builder(NONCE, SOCKET, EXPECT));
     assert.ok(script.includes(' ; display-message -p'));
     assert.ok(script.includes(`XC1${NONCE}\x1fguarded`));
@@ -187,6 +192,11 @@ test('create can bind existing generation or refuse a newly appeared server', ()
   const absent = createSessionScript(NONCE, SOCKET, { name: 'x', expectedGen: null });
   assert.ok(absent.includes('start-server \\; if-shell -F'));
   assert.ok(absent.includes('#{==:#{session_id},}'));
+  const invocation = readable(absent).split('\n').find((line) => line.startsWith('out=$('));
+  assert.ok(invocation.indexOf('new-session') < invocation.indexOf('display-message'),
+    'tmux 3.0a cannot display a pre-create guard marker without a live pane');
+  assert.equal(invocation.includes(`XC1${NONCE}\x1fguarded`), false);
+  assert.ok(readable(existing).includes(`XC1${NONCE}\x1fguarded`));
   for (const script of [existing, absent]) assert.equal([...script.matchAll(/tmux -u /g)].length, 1);
 });
 
@@ -238,7 +248,7 @@ test('RV1-15: capture bounds newest raw bytes before hex, emits truncation, chec
   assert.ok(script.includes('capture-pane -p -J -t "%7" -S -250'));
   assert.ok(script.includes('size=8192; truncated=1'));
   assert.ok(script.includes('tail -c "$size" "$tmp/raw"'));
-  assert.ok(script.indexOf('tail -c') < script.indexOf('od -An -v -tx1'));
+  assert.ok(script.indexOf('tail -c') < script.indexOf('od -An -v -tx1 "$tmp/tail"'));
   assert.ok(script.indexOf('if [ "$rc" -ne 0 ]') < script.indexOf('tail -c'));
   assert.ok(script.includes('[89ab][0-9a-f]*) hex=${hex#??}'));
   assert.ok(script.includes('"$hex" "$truncated"'));
@@ -254,7 +264,14 @@ test('detach checks original pane ancestry but acts on its approved session; kil
   assert.ok(detach.includes('if-shell -F -t "%7"'));
   assert.ok(detach.includes('detach-client -s "$3"'));
   for (const [kind, target] of [['pane', '%7'], ['window', '@5'], ['session', '$3']]) {
-    assert.ok(readable(killScript(NONCE, SOCKET, EXPECT, kind)).includes(`kill-${kind} -t "${target}"`));
+    const raw = killScript(NONCE, SOCKET, EXPECT, kind);
+    const script = readable(raw);
+    assert.ok(script.includes(`kill-${kind} -t "${target}"`));
+    const invocation = script.split('\n').find((line) => line.startsWith('out=$('));
+    assert.equal(invocation.includes(`XC1${NONCE}\x1fok`), false,
+      'no target-dependent native success marker after killing the final resource');
+    assert.ok(raw.lastIndexOf('printf \'%s\\n\' "$out"') < raw.indexOf(`\\037ok`));
+    assert.ok(raw.indexOf('if [ "$rc" -ne 0 ]') < raw.indexOf(`\\037ok`));
   }
   assertInvalid(() => killScript(NONCE, SOCKET, EXPECT, 'client'));
 });

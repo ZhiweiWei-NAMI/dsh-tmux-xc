@@ -88,6 +88,42 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 300000 }, () => {
     }
   })
 
+  for (const kind of ['session', 'window', 'pane']) {
+    it(`F4: empty-server create, multi-pane parents, detach, and last-${kind} kill`, async (t) => {
+      const ctx = suiteContext(t)
+      if (!ctx) return
+      const service = await ctx.makeService()
+      t.after(() => service.close())
+      assert.equal(hasServer(ctx.socketName), false)
+      const session = await service.create({
+        hostId: 'xc', socketId: 'it', kind: 'session', name: uniqueName('empty'),
+      })
+      assert.equal(session.sid, 0, 'fresh server includes numeric zero ids')
+      const window = await service.create({
+        hostId: 'xc', socketId: 'it', kind: 'window', parentUri: session.uri, name: uniqueName('child'),
+      })
+      const originalPane = await service.adopt({
+        hostId: 'xc', socketId: 'it', target: `%${paneIdOf(ctx.socketName, `@${window.wid}`)}`,
+      })
+      const split = await service.create({ hostId: 'xc', socketId: 'it', kind: 'pane', parentUri: originalPane.uri })
+      // Session/window references now lack a unique descendant pane. Their
+      // guards must still use valid targets and retain only supplied ancestors.
+      await service.detach({ uri: session.uri })
+      await service.detach({ uri: window.uri })
+      await service.detach({ uri: split.uri })
+      const extra = await service.create({
+        hostId: 'xc', socketId: 'it', kind: 'window', parentUri: session.uri, name: uniqueName('multi'),
+      })
+      await service.kill({ uri: split.uri, confirm: `xc:it:%${split.pid}` })
+      await service.kill({ uri: window.uri, confirm: `xc:it:@${window.wid}` })
+      await service.kill({ uri: extra.uri, confirm: `xc:it:@${extra.wid}` })
+      const target = { session: `$${session.sid}`, window: '@0', pane: '%0' }[kind]
+      const last = kind === 'session' ? session : await service.adopt({ hostId: 'xc', socketId: 'it', target })
+      assert.equal((await service.kill({ uri: last.uri, confirm: `xc:it:${target}` })).killed, true)
+      await waitFor(() => !hasServer(ctx.socketName))
+    })
+  }
+
   it('A6: kill + recreate the same name leaves the old ref TARGET_GONE', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return

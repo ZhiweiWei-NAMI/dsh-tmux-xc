@@ -110,7 +110,9 @@ test('inventory route preserves host error codes and reports thrown internal err
   const route = scope.routes.get('/api/tmux-xc/inventory');
   const response = await route.fetch(new Request('http://localhost/api/tmux-xc/inventory'));
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, hosts: [host] });
+  const { reachable, ...routeHost } = host;
+  assert.equal(reachable, false, 'legacy tool flag remains on the service result');
+  assert.deepEqual(await response.json(), { ok: true, hosts: [routeHost] });
   internal = new TypeError('records must be an array');
   const failure = await route.fetch(new Request('http://localhost/api/tmux-xc/inventory'));
   assert.equal(failure.status, 500);

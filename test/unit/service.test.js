@@ -509,6 +509,41 @@ for (const kind of ['session', 'window', 'pane']) {
   });
 }
 
+test('F4: service supplies valid zero-id guard targets for sole and multi-pane parents', async () => {
+  const readable = (script) => {
+    let previous;
+    do {
+      previous = script;
+      script = script.replace(/\\([\\"$])/g, '$1').replaceAll("'\\''", "'");
+    } while (script !== previous);
+    return script;
+  };
+  for (const multi of [false, true]) {
+    for (const kind of ['session', 'window', 'pane']) {
+      const transport = makeTransport();
+      transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 0, wid: 0, pid: 0 }),
+        ...(multi ? [paneRecord({ sid: 0, wid: 0, pid: 1, pindex: 1 })] : [])];
+      transport.state.created = [['created', GEN, '$0', '@0', '%0', 'train', 'train']];
+      const { service } = makeService(transport);
+      const uri = ref({ kind, sid: 0, wid: kind === 'session' ? null : 0, pid: kind === 'pane' ? 0 : null });
+      const target = { session: '$0', window: '@0', pane: '%0' }[kind];
+      await service.detach({ uri });
+      await service.kill({ uri, confirm: `namilab:default:${target}` });
+      if (kind !== 'window') await service.create({
+        hostId: 'namilab', kind: kind === 'session' ? 'window' : 'pane', parentUri: uri,
+      });
+      for (const { script } of transport.calls.filter((call) => call.mutating)) {
+        const queue = readable(script).split('\n').find((line) => line.startsWith('out=$('));
+        assert.ok(queue.includes(`if-shell -F -t "${target}"`));
+        assert.ok(queue.includes('#{==:#{session_id},$0}'));
+        assert.equal(queue.includes('#{==:#{window_id},@0}'), kind !== 'session' || !multi);
+        assert.equal(queue.includes('#{==:#{pane_id},%0}'), kind === 'pane' || !multi);
+        assert.equal(/undefined|null|NaN/.test(queue), false);
+      }
+    }
+  }
+});
+
 test('linked window absent from its referenced session refuses send with AMBIGUOUS', async () => {
   const transport = makeTransport();
   transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 4 }), paneRecord({ sid: 5 })];
