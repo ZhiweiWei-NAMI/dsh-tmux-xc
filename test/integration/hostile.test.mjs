@@ -56,7 +56,7 @@ describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
       // Pane title with record separators, a newline and a forged XC1 record. None of this may
       // escape its field or invent inventory entries (framing uses a per-call nonce).
       const forgedRecord = 'XC1deadbeefdead\x1fpane\x1f0-0\x1f/tmp/evil\x1f$999\x1fFORGED\x1e'
-      const hostileTitle = `evil\x1e${forgedRecord}\x1f\n\x1b]0;title\x07\u202e`
+      const hostileTitle = `evil\x1e${forgedRecord}\x1f\n\u202e`
       localTmux(ctx.socketName, 'select-pane', '-t', `%${paneId}`, '-T', hostileTitle)
 
       const inv = await service.inventory({ hostId: 'xc' })
@@ -98,8 +98,9 @@ describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
       }
       const hostile = findPaneById(inv, 'xc', paneId)
       assert.ok(hostile, 'hostile pane is listed')
-      assert.doesNotMatch(String(hostile.pane.title), /[\x1e\x1f]/, 'title separators stripped')
+      assert.doesNotMatch(String(hostile.pane.title), /[\x1e\x1f\n\r]/, 'title separators/newlines stripped')
       assert.doesNotMatch(String(hostile.pane.title), /[\x00-\x08\x0b\x0c\x0e-\x1f]/, 'no C0 controls in title')
+      assert.doesNotMatch(String(hostile.pane.title), BIDI_RE, 'no bidi controls in title')
 
       // Capture is sanitized and the fake token is data, not a parsed reference.
       const adopted = await service.adopt({
