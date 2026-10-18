@@ -43,6 +43,8 @@ test/integration/*.mjs  real ssh (loopback sshd) + isolated tmux socket (WP5)
       - id: namilab            # [a-z0-9][a-z0-9_-]{0,31}; stable key used in references
         label: NaMILab         # display only
         ssh: NaMILab           # alias from the user's ssh config; ^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$
+        # transport: local     # only when DSH runs on the tmux host itself: run the same `sh -s` scripts
+        #                      # locally (argv ["sh","-s"]) instead of over ssh; `ssh` is then ignored
         sockets:               # allow-list; default [{id: default}]
           - { id: default }                       # tmux default socket
           - { id: xc, name: xc }                  # tmux -L xc
@@ -125,6 +127,7 @@ argv (no local shell):
 - Retry policy: read-only scripts may retry **once** when ssh fails before producing the `begin` record; mutating scripts are **never** retried or replayed. Abort → terminate ssh; a mutation aborted after spawn reports `OUTCOME_UNKNOWN` with the guidance "verify with capture before retrying".
 - Process: prefer `ctx.subprocess.spawn` (DSH lifecycle, Windows job containment); fall back to `node:child_process.spawn` with `shell:false`, `windowsHide:true`. Collect stdout ≤ 4 MiB, stderr ≤ 64 KiB.
 - tmux invocation in scripts: `tmux -u <socket args>`; socket args `-L <name>` / `-S <path>` from config only.
+- `transport: local` (Linux/macOS DSH on the tmux host): identical scripts and framing, argv `["sh","-s"]`, no ssh options; error classification limited to local spawn failures. Identity (machine-id + uid) is still verified, so a registry shared with an ssh-configured host id cannot be confused.
 
 ## 7. Remote scripts (`lib/core/scripts.js`) — tmux 3.0a floor
 

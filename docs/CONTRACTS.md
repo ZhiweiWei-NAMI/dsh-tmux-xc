@@ -41,7 +41,7 @@ export function fenceUntrusted(text): string           // "untrusted remote term
 ## lib/core/transport.js (WP1)
 ```js
 export function buildSshArgv(cfg: { sshPath, sshConfigFile, connectTimeoutSec }, alias): string[]
-   // exactly the argv in DESIGN §6, last two elements: alias, "sh -s"
+   // exactly the argv in DESIGN §6, last two elements: alias, "sh -s"; host.transport === 'local' → ["sh", "-s"]
 export async function runRemote({ cfg, alias, script, nonce, mutating, signal, timeoutMs, spawnImpl }):
    Promise<{ records: string[][], stderr: string, exitCode: number|null }>
    // spawnImpl(argv, {stdin}) defaults to a node:child_process based implementation (shell:false, windowsHide:true)
