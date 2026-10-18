@@ -1,83 +1,172 @@
 # 使用指南（中文）
 
-任务导向的 dsh-tmux-xc 使用说明。假设已完成 [INSTALL.zh-CN.md](INSTALL.zh-CN.md) 的安装与配置。术语：**引用（Reference）** = 指向某个精确 tmux 对象的芯片/token；**采纳（adopt）** = 把已存在的远端对象登记进共享注册表。
+任务导向的 dsh-tmux-xc **0.1.1** 使用说明。假设已完成 [INSTALL.zh-CN.md](INSTALL.zh-CN.md) 的安装与配置。术语：**任务（task）** = 面板里的一个 tmux 会话（单窗口/单窗格时会折叠成一行）；**引用（Reference）** = 指向某个精确 tmux 对象的芯片/token；**采纳（adopt）** = 把已存在的远端对象登记进共享注册表；**别名（alias）** = 仅本插件显示的友好名称。
 
 ---
 
 ## 1. 打开面板
 
 - 打开任意会话，右侧边栏点击 **tmux** 标签；或点输入框工具栏的面板图标。
-- 面板树：`主机 → socket/服务器代际 → 会话 → 窗口 → 窗格`。每个节点显示 `$N`/`@N`/`%N` id、前台命令 `cmd`、`cwd`、**adopted** 徽标（已采纳/已创建）与最近验证时间。
-- 节点按钮：**引用**（插入芯片）、**复制连接命令**（复制 `ssh -t <别名> tmux … attach -t '$N'` 到剪贴板，供你自己的终端或 DSH 官方终端面板使用——插件本身不渲染实时终端）、**忘记**（仅采纳/创建的节点，从注册表移除）。
+- 面板按“任务”组织：`主机 → 任务（会话）→ 窗口/窗格`。
+  - 只有一个窗口、一个窗格的会话折叠为**一行**（标题即别名或会话名，附带前台命令与 `cwd`）；多窗口/多窗格才展开。
+  - 已登记（已创建/已采纳）的任务带小徽标，并在主机内**排在最前**。
+  - 面板**没有工作区过滤**：总是显示全部工作区；后端仍接受旧的 `workspace` 查询参数，但面板不再使用它。
+- 点头部 **高级详情** 才显示 socket（名称/路径）、服务器代际与 `$N`/`@N`/`%N` id；该开关会被记住。日常使用不需要看这些 id。
+- 面板是 tmux **结构视图**，不是交互终端；字号只影响面板显示。
 
-## 2. 刷新与范围
+## 2. 实时刷新与字号
 
 | 操作 | 说明 |
 |---|---|
-| 刷新 | 面板打开/手动刷新时，以及每次工具调用前，都会向远端取**最新**状态；结果更新各条目的验证时间与状态 |
-| 范围过滤 | 列表支持按 `hostId`、`workspace`、`all`（跨全部工作区）过滤；面板选择是本会话的界面状态，不写入全局 |
-| 可达性 | 主机不可达会显示为 `unreachable`（含错误码），**不会**被误显示成「空」 |
+| 自动刷新 | 面板挂载期间每 ~3 秒轮询一次版本号；只有版本变化（登记/别名/设置/删除等）才重新拉取 inventory，请求不会重叠 |
+| 手动刷新 | 头部 **刷新**；上次刷新时间显示在头部 |
+| 字号 | **A− / A+**（10–18 px，默认 12），同时作用于面板与下方快照；持久化在浏览器 localStorage，重开面板/刷新页面仍保留 |
+| 可达性 | 主机不可达显示 **不可达**（含错误码），不会被误显示成「空」 |
 
-## 3. 引用（Reference）
+## 3. 任务、别名与登记
 
-- 在任意节点点 **引用 / Reference**：当前输入框插入芯片 `@[label](dsh-tmux:v1/...)`，**不发送任何内容、不向远端敲任何键**。
+### 3.1 别名（本地显示名）
+
+- 会话/窗口/窗格行的 **⋯** 菜单里有 **别名**；输入后回车（Esc 取消）即保存，失焦也会提交。留空保存 = 清除别名。
+- 别名只改本插件显示：**绝不重命名远端 tmux**，也不会向远端写任何东西。别名是登记资源的元数据；若目标尚未登记，服务端会先**采纳/登记**该目标，再保存别名。
+- 约束：清理控制/双向字符后 1..40 个字符，且不能含 `[ ] ( )`。
+- agent 也可用 `tmux_xc_alias { ref, alias }` 设置（`alias: null` 清除）；该工具不需要审批，同样会先登记未登记的目标。
+- 在面板里点 **引用** 时，芯片标签会以别名为前缀（如 `tmux 插件开发 · 窗格 claude-ready:1.0 %7`）；历史消息里的芯片按原样渲染（已保存的 token 标签不随后续改名而变），但芯片里保存的 uri 始终指向精确身份。
+
+### 3.2 配置里的显示提示（`hosts[].aliases`）
+
+写在 profile 配置里，按**远端会话名**（可选再按**远端窗口名**）匹配，仅用于显示：
+
+```yaml
+- id: tmux-xc
+  config:
+    hosts:
+      - id: namilab
+        label: NaMILab
+        ssh: NaMILab
+        aliases:
+          # 开发者自己的窗格：会话 claude-ready、窗口 work。
+          - { session: claude-ready, window: work, alias: "tmux 插件开发" }
+          # AC 的会话（占位符换成你的远端会话名）。
+          - { session: "<AC 远端会话名>", alias: "AC" }
+          # AeroWorld 的会话。
+          - { session: "<AeroWorld 远端会话名>", alias: "AeroWorld" }
+```
+
+| 规则 | 说明 |
+|---|---|
+| 匹配 | `session` 必须等于远端会话名；带 `window` 时还要求窗口名相等，且只作用于该窗口及其窗格（**不**改会话行本身的标题）。不带 `window` 的提示是会话及其窗口/窗格的兜底 |
+| 优先级 | 对**精确目标**的本地别名（面板/`tmux_xc_alias` 设置）**优先于**配置提示 |
+| 生命周期 | 配置提示随配置存在，**tmux 重启后仍然有效**；本地别名按精确身份（含服务器代际）存储，重启后需重新设置（或重新登记后再设） |
+| 身份 | 提示**绝不**参与身份推导；引用/操作始终使用 `dsh-tmux:v1/...` 的精确身份 |
+
+### 3.3 登记（让目标出现在面板/其它会话）
+
+- `tmux_xc_create` 创建的对象由插件**在代码里自动登记**，结果包含引用 token；它在面板里带「已创建」徽标并排在主机内最前（面板没有单独的「已登记」过滤视图）。
+- 通过 shell/终端工具自己起的 tmux 目标（例如经由 shell 执行 `tmux new-session`），以及用户用芯片引用过的目标，**agent 必须调用 `tmux_xc_adopt` 登记**（工具说明已这样要求）；`tmux_xc_alias` 也会顺带登记。
+- **取消登记**（原 0.1.0 的「忘记」）在 **⋯** 菜单里：只删除本插件的登记记录，不关闭远端会话/窗口/窗格，也不影响其中进程。
+
+## 4. 引用（Reference）
+
+- 在任意节点点 **引用会话 / 引用窗口 / 引用窗格**（按钮会写明类型）：当前输入框插入芯片 `@[label](dsh-tmux:v1/...)`，**不发送任何内容、不向远端敲任何键**。
 - 发送后，消息保留该 token，刷新页面仍渲染为芯片。
-- 引用绑定：主机指纹 + uid + socket + 服务器代际 + `$`/`@`/`%` id；重命名仍可解析，服务器重启/名字复用则显式失败（见 §8）。
+- 引用绑定：主机指纹 + uid + socket + 服务器代际 + `$`/`@`/`%` id；重命名仍可解析，服务器重启/名字复用则显式失败（见 §10）。
 - 让 agent 用引用时，**传 token 里括号内的 uri（`dsh-tmux:v1/...`）**，不要传整个芯片或标签文本。
 
-## 4. 让 agent 操作
+## 5. 一键导航与只读快照
 
-1. 引用目标后，用自然语言告诉 agent 做什么，例如：
-   - "用 `tmux_xc_list` 看看 namilab 上有哪些会话"
-   - "捕获那个窗格最近 80 行输出"
-   - "在引用的窗格里运行 `git status` 并回车"
-2. agent 调用相应 `tmux_xc_*` 工具；会改变远端状态的工具会弹出审批卡片。
+- 点击会话历史里的 tmux 芯片（或输入框里芯片的预览入口）：打开该会话的 tmux 面板 → 重新解析芯片里的精确身份（只读 capture）→ 在树中展开祖先、选中并高亮目标 → 在树下方显示**快照**。
+- 快照头部写明 label、类型、**只读快照，不是交互终端**，并有 **刷新**；内容按纯文本渲染，字号跟随 A−/A+。
+- 会话/窗口引用会抓取其**活动窗格**，快照标签会写明是哪个窗格。
+- 引用失效（tmux 服务已重启 / 目标已不存在 / 主机不可达）时显示明确提示；**绝不**改选别的窗格、**绝不**新建对象、**绝不**打开 ssh 终端。
 
-工具速查（参数与策略见 [README.md](../README.md)「Agent tools」）：
+## 6. 复制连接命令
 
-| 意图 | 工具 | 是否需审批 |
+节点行的 **复制连接命令** 菜单有两项：
+
+| 菜单项 | 目标环境 | 形式 |
+|---|---|---|
+| **复制 Bash 命令（Linux/macOS/Git Bash）** | Bash / POSIX shell | `ssh -t -o ClearAllForwardings=yes '<ssh 别名>' '<远端 tmux 命令>'` |
+| **复制 PowerShell 命令（Windows）** | Windows PowerShell | 同一条 ssh 命令，按 PowerShell 单引号规则转义 |
+
+- 两者都包含 `-o ClearAllForwardings=yes`，并精确带上 socket（`-S <路径>` / `-L <名称>`）与会话/窗口/窗格目标（`$N` / `@N` / `%N`）。
+- **不支持 `cmd.exe`**：`%` 与引号规则不同，请用 PowerShell（菜单提示也会说明）。
+- `transport: local` 的主机没有 ssh 形式：**Bash** 菜单项给出本地 tmux 命令；**PowerShell** 菜单项只适用于 ssh 主机，此时会提示复制失败，请用 Bash。
+- 复制出来的命令供**你自己的终端**或 DSH 官方终端面板使用；插件面板本身不渲染交互终端。
+- 验证范围：Bash 与 **PowerShell 7.6（Linux，Standard 与 Legacy 两种参数传递模式）** 已验证；**Windows PowerShell 5.1 + Windows OpenSSH 未由我们验证**（见 [COMPATIBILITY.md](COMPATIBILITY.md)）。
+
+## 7. 删除窗格 / 窗口 / 会话
+
+- 行内 **删除窗格 / 删除窗口 / 删除会话** 打开确认对话框，列出**精确范围**：名称、别名（若有）、主机、socket、类型，以及会终止什么：
+  - 会话：该会话中的所有窗口/窗格及进程；窗口：该窗口中的所有窗格及进程；窗格：该窗格中的进程。
+  - 对话框同时写明：**不会删除任何文件；不影响其他对象**。
+- 点 **删除** 才执行（点击确认即批准；对象删除不要求输入目标串）。服务端仍用精确身份 + 代数守卫，只销毁那一个对象：**绝不 kill 整个 tmux 服务器，绝不删文件**。
+- 若删除的是最后一个窗格，窗口/会话可能随之消失；面板刷新后只会选中仍存在的祖先，不会误选复用了数字 id 的新对象。
+
+## 8. 移除主机
+
+主机行的 **⋯ → 移除主机…** 打开对话框，两个明确分开的选项：
+
+| 选项 | 行为 |
+|---|---|
+| **(a) 仅从插件移除（不连接远端）** | 删除该主机的**登记记录与别名**并隐藏主机；**远端 tmux 继续运行**。主机不可达时只有这一项可用 |
+| **(b) 先终止所选远端会话，再移除主机** | 勾选该主机的会话（至少一个；默认勾选由本插件创建的那些，已采纳/未登记的默认不勾），逐个**重新解析**后用带守卫的 kill 终止**会话**（已失效的不会被误杀）；**绝不动 tmux 服务器**。仅当**所有**所选会话都成功终止时才移除主机；任一失败则主机**不被移除**，并逐条显示成功/失败，可改用 (a) |
+
+- 两种方式都要**输入主机 ID** 才可确认；对话框分别显示每个会话的别名/名称、socket 与 `$N`（删除对话框中的「名称」为远端的类型化标签，别名单列一行）。
+- 移除后：该主机从面板、inventory 和所有工具中消失；工具返回 `HOST_NOT_ALLOWED`（提示“removed in the tmux panel; restore it there”）。审批开关 **OFF 也不能**放行已移除的主机。
+- **恢复**：**高级详情 → 已移除的主机 → 恢复**。恢复的只是主机可见性；**(a) 清掉的登记记录与别名不会恢复**。
+- **profile 配置文件不会被修改**：要永久移除，请自行删除 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里对应的 host 配置块。
+- **取消登记** 仍保留在 **⋯** 菜单：它只删登记记录，与移除主机是两件事。
+
+## 9. 审批
+
+- 面板头部按钮显示 **插件审批：开/关**；点开是一个开关与来源说明（面板设置 / 配置文件 / 默认）以及 **恢复默认**。
+- **默认：开**。开 = 创建 / 发送 / 删除(kill) / 分离 每次询问；关 = 在**已配置且未被移除**的主机上直接执行这四类操作。
+- 生效优先级（每次调用时读取，改开关**无需重启**）：
+
+| 优先级 | 来源 | 说明 |
+|---|---|---|
+| 1 | 面板设置 `settings.approval.enabled` | **恢复默认** 会清除面板覆盖（置 `null`），回落到下一层。按钮旁显示当前来源（面板设置/配置文件/默认） |
+| 2 | 配置 `approval.enabled: true/false` | 显式布尔值 |
+| 3 | 0.1.0 旧版每键配置 `approval.create/send/detach: allow` | **已弃用**；仅当既无面板设置、又无显式 `approval.enabled` 时，该键单独放行 |
+| 4 | 内置默认 | **开**（ask） |
+
+- `kill` 不再“始终询问”，而是跟随这个开关；但 `tmux_xc_kill` 的 `confirm` 仍必须等于 `tmux_xc_resolve` 给出的精确目标串（防止 agent 手误）。
+- 当旧版每键配置**实际生效**时，面板会显示「旧版每键配置仍生效：…」提示。
+- 这个开关**只控制本插件的审批提示**：DSH 宿主自身的权限/拒绝规则、以及 SSH 认证失败**仍然生效**，插件不能也不会覆盖 DSH 的审批策略。
+- 当 DSH 当前没有审批通道时，由 **DSH 自己**拒绝并给出它自己的消息（dsh-tools 的 `serviceAsk`：`tool "<name>" requires approval, but no approval channel is available`）；插件不会把“无法审批”当成“同意”。
+- 插件自身发起的拒绝有独立错误码（见 §12），措辞**不会**说成“用户拒绝了”。
+
+## 10. 可靠发送（send）
+
+- 文本/按键与 `Enter` 是**两个带守卫的步骤**：先发文本/按键，等待 `send.enterDelayMs`（默认 **400 ms**，范围 0..5000），再单独发 `Enter`。这样 Ink/raw-mode 的交互式 CLI 不会把 `text\r` 当成一次粘贴而把内容留在输入框里。
+- 第二步守卫失败时不会把 Enter 发到别处，并**精确报告部分送达**：
+  - 文本/按键已送达、Enter 未送达：`text/keys delivered but Enter was not delivered (CODE); the pane changed or refused input between the two steps — verify with capture before retrying`。
+  - 只发 Enter 且未送达：`Enter was not delivered (CODE); nothing was sent to the pane`。
+  - 已发出但无法确认：`OUTCOME_UNKNOWN`，此时 `delivered.enter` 可能是 `'unknown'`；消息会要求先 capture 核实再决定是否重试（**不会自动重放**）。
+- 成功结果包含：
+  - `delivered { text, keys, enter }`：远端实际确认送达的内容；`enter` 可能是 `true` / `false` / `'unknown'`。
+  - `submission { checked, state }`：Enter 之后约 300 ms 抓取光标行做启发式判断（未要求 Enter 时返回 `checked: false, state: 'unknown'`）。`pending` = 所发文本最后 ≤24 个非空白字符仍出现在光标行（很可能还在输入框）；`cleared` = 已不可见；`unknown` = 探测失败（抓不到光标行）；注意：所发文本全是空白、没有可见字符时，判定为 `cleared`（`detail` 说明无可比较字符）。
+- **送达 ≠ 已执行**。`cleared` 也不能证明目标程序执行了任务；需要确认时用 `tmux_xc_capture` 看实际输出。
+- `pending` 时 agent 应再次发送 `keys: ["Enter"]` 或告知用户，然后再 capture；`enter` 未知时先 capture 核实，避免重复提交。
+
+## 11. Agent 工具与分工
+
+| 意图 | 工具 | 是否需插件审批 |
 |---|---|---|
 | 找目标 | `tmux_xc_list` | 否 |
 | 确认某个引用现在指向谁 | `tmux_xc_inspect` / `tmux_xc_resolve` | 否 |
 | 找回本会话曾提交的引用 | `tmux_xc_references` | 否 |
 | 看窗格最近输出 | `tmux_xc_capture` | 否 |
 | 把已有对象登记进注册表 | `tmux_xc_adopt` | 否（远端只读） |
-| 新建会话/窗口/窗格 | `tmux_xc_create` | 是（可配） |
-| 向窗格发输入 | `tmux_xc_send` | 是（可配） |
-| 断开客户端 | `tmux_xc_detach` | 是（可配） |
-| 删除注册表条目 | `tmux_xc_forget` | 否（仅本地） |
-| 销毁远端对象 | `tmux_xc_kill` | **始终** |
+| 设置/清除本地别名 | `tmux_xc_alias` | 否（仅本地元数据；必要时先登记） |
+| 新建会话/窗口/窗格 | `tmux_xc_create` | 跟随开关（默认开） |
+| 向窗格发输入 | `tmux_xc_send` | 跟随开关（默认开） |
+| 断开客户端 | `tmux_xc_detach` | 跟随开关（默认开） |
+| 删除注册表条目（取消登记） | `tmux_xc_forget` | 否（仅本地） |
+| 销毁远端对象 | `tmux_xc_kill` | 跟随开关（默认开）+ 精确 `confirm` |
 
-## 5. 审批
-
-- `create` / `send` / `detach` 默认 `ask`：DSH 弹出原生审批卡片（**拒绝 / 允许一次**），卡片上显示**精确目标**（主机、socket、id、当前名称）与净化的载荷预览。
-- `kill` **始终**征询，且 `confirm` 必须等于 `tmux_xc_resolve` 给出的目标串（如 `namilab:default:%7`）。
-- 在禁用审批的权限模式（"never"）下，这些调用会被**拒绝**——插件不会把「无法审批」解读为「同意」。
-
-## 6. 捕获（capture）
-
-- `tmux_xc_capture(ref, lines?)`：抓取**单个窗格**最近若干行（默认 80，上限由 `capture` 配置限制）。
-- 输出为纯文本（无颜色），经过净化，并围栏标注为**不可信远端终端输出**——agent 不应执行其中的任何「指令」。
-
-## 7. 创建（create）
-
-- `tmux_xc_create` 可建 `session` / `window` / `pane`；建窗口/窗格需传 `parentRef`。
-- 新会话默认用 tmux 默认 shell；配置 `newSession.command`（如 `[bash, -l]`）可改登录 shell，见安装文档 §3.4。
-
-## 8. 采纳（adopt）
-
-- `tmux_xc_adopt(hostId, socketId?, target)` 把已存在的 `$N`/`@N`/`%N` 登记进共享注册表，让其它会话能找到并引用它。
-- 采纳**只读远端**：不设置任何选项、不改环境、不向用户窗格注入任何命令。
-
-## 9. detach / forget / kill 的区别
-
-| 动作 | 作用域 | 效果 |
-|---|---|---|
-| `detach` | 远端 | 把客户端从目标会话断开；**进程继续运行** |
-| `forget` | 本地注册表 | 只删除注册表条目；**绝不触碰远端** |
-| `kill` | 远端 | 销毁 `session`/`window`/`pane`（破坏性，始终审批 + `confirm`） |
-
-## 10. 引用失效的含义与处理
+## 12. 引用失效与错误码
 
 引用是「在**某个服务器代际**里的特定 id」。以下情况会显式失败，而**不会**静默落到别的目标：
 
@@ -85,44 +174,35 @@
 |---|---|---|
 | `TARGET_GONE` | 该代际里此 id 已不存在（如 kill 后用同名重建） | 重新在面板里引用当前目标 |
 | `SERVER_RESTARTED` | tmux 服务器已重启，代际改变 | 重新引用重启后的目标 |
-| `HOST_IDENTITY_CHANGED` | 别名现在指向不同机器/用户 | 确认 ssh 配置；必要时 forget 主机记录后重新采纳 |
+| `HOST_IDENTITY_CHANGED` | 别名现在指向不同机器/用户 | 确认 ssh 配置；必要时处理主机登记后重新采纳 |
 | `SERVER_GONE` | 该 socket 上无 tmux 服务器 | 先启动远端 tmux 再刷新 |
-| `AMBIGUOUS` | 目标跨多个窗格/会话，无法唯一确定（如 session/窗口引用却含多个窗格） | 改为引用具体窗格 |
-| `TARGET_CHANGED` | 你批准后、执行前目标身份发生了变化（审批绑定的是批准时的精确身份） | 重新解析/引用后再发起，重新审批 |
+| `AMBIGUOUS` | 目标无法唯一确定（如 session/窗口引用却含多个窗格） | 改为引用具体窗格 |
+| `TARGET_CHANGED` | 批准后、执行前目标身份发生了变化（审批绑定批准时的精确身份） | 重新解析/引用后再发起，重新审批 |
 | `SYNCHRONIZED_PANES` | 目标窗口开启了 `synchronize-panes`，输入会广播到同窗所有窗格 | 插件拒绝发送且不会改动该选项；如确需发送，请自行关闭同步后重试 |
 | `PANE_IN_MODE` / `PANE_DEAD` / `PANE_INPUT_DISABLED` | 窗格处于复制/查看模式、进程已退出或输入被禁用 | 在终端里退出该模式 / 重建窗格后重试 |
 | `OUTCOME_UNKNOWN` | 变更已发出后连接中断或被取消，无法确认是否生效 | **不会自动重放**；先 `tmux_xc_capture` 核实再决定是否重试 |
+| `APPROVAL_CANCELLED` | 审批被取消/中止（插件侧拒绝，非“用户拒绝”） | 重新发起操作，按需重新审批 |
+| `APPROVAL_MISSING` | 插件要求的已批准目标身份快照缺失（审批未完成、审批状态丢失或调用被重新排队） | 重新发起并重新审批；不要绕过 |
+| `CONFIRM_MISMATCH` | kill 的 `confirm` 与解析出的目标串不一致 | 先 `tmux_xc_resolve` 取得目标串（如 `lab:e2e:%1`）再确认 |
 | `REMOTE_ERROR` | tmux 拒绝了命令（消息里附带 tmux 原始报错，已清洗） | 按报错处理 |
 | `HOST_UNREACHABLE` / `SSH_AUTH` / `SSH_HOSTKEY` / `SSH_MISSING` / `TIMEOUT` | ssh 层失败：网络、认证（BatchMode 不能输口令）、主机密钥不符、找不到 ssh、超时 | 先在终端执行 `ssh -o BatchMode=yes <别名> tmux -V` 自检；主机密钥问题请按 OpenSSH 正常流程核实，插件绝不跳过校验 |
-| `REGISTRY_UNAVAILABLE` | 持久注册表无法打开（存储损坏/版本不兼容/重复打开），插件按设计"失败即关闭" | 修复 `$DSH_HOME/storages/dsh_tmux_xc/` 后重启 DSH；仅在明确需要时配置 `registry: memory`（重启即丢失） |
-| `CONFIRM_MISMATCH` | kill 的 `confirm` 与解析出的目标串不一致 | 先 `tmux_xc_resolve` 取得目标串（如 `lab:e2e:%1`）再确认 |
-| `HOST_NOT_ALLOWED` / `SOCKET_NOT_ALLOWED` | 主机/socket 不在配置白名单 | 在 `cordis.patch.yml` 的 `tmux-xc.config.hosts` 中添加 |
-
-`/compact`（上下文重置）后插件会自动向 agent 重新播报本会话的引用，agent 会在操作前重新解析；也可让 agent 用 `tmux_xc_references` 主动取回。
-
-## 11. 多会话协作示例（A / B）
-
-已实测通过：会话 A 通过 ssh 创建会话 `demo-a`；会话 B 从面板引用窗格 `%3`，经审批后发送 `echo hello-from-B`，**只有该窗格**收到；刷新页面、执行 `/compact` 后依然可用。
-
-- **会话 A（创建/采纳方）**：`tmux_xc_create`（或 `tmux_xc_adopt`）→ 得到注册条目，面板出现 adopted 徽标。
-- **会话 B（使用方）**：面板引用 `%3` → 输入框出现芯片 → 发送指令 → 审批 → agent `tmux_xc_send` 只作用于 `%3`。
-- 跨会话隔离：两个会话并发操作不同窗格互不串扰。
-
-## 12. 常见错误码与处理
-
-| 错误码 | 触发 | 处理 |
-|---|---|---|
-| `HOST_NOT_ALLOWED` / `SOCKET_NOT_ALLOWED` | 请求的 host/socket 不在配置白名单 | 在配置里加入该 host/socket 后重启 |
-| `HOST_UNREACHABLE` | ssh 连接失败（exit 255、连接被拒、DNS 等） | `ssh -o BatchMode=yes <alias> tmux -V` 排查网络/别名 |
-| `SSH_AUTH` | 认证失败（密钥需口令短语、无 agent） | `ssh-add` / 启用 ssh-agent |
-| `SSH_HOSTKEY` | 主机密钥验证失败或变化 | 按安全流程更新 `known_hosts` |
-| `SSH_MISSING` | 找不到 ssh 二进制 | 配置 `sshPath` |
 | `REMOTE_TOOL_MISSING` | 远端找不到 tmux | 确认远端 PATH 里有 tmux |
-| `TIMEOUT` | 连接/命令超时 | 调大 `connectTimeoutSec`/`commandTimeoutMs` 或排查网络 |
-| `CANCELLED` | 操作被取消 | 重试即可（只读） |
-| `OUTCOME_UNKNOWN` | 变更类操作在脚本发出后中断，结果不确定 | 用 capture 确认状态后再决定是否重试（变更**不会**自动重放） |
-| `PROTOCOL` | 缺少结束标记/协议异常 | 反馈问题；重试 |
-| `INVALID_ARGUMENT` | 参数非法（如非法目标串、`keys` 含未允许按键） | 按工具描述修正参数 |
-| `CONFIRM_MISMATCH` | `kill` 的 `confirm` 不等于 `resolve` 目标串 | 用 `tmux_xc_resolve` 取得目标串 |
+| `REGISTRY_UNAVAILABLE` | 持久注册表无法打开（存储损坏/版本不兼容/重复打开），插件按设计“失败即关闭” | 修复 `$DSH_HOME/storages/dsh_tmux_xc/` 后重启 DSH；仅在明确需要时配置 `registry: memory`（重启即丢失） |
+| `HOST_NOT_ALLOWED` / `SOCKET_NOT_ALLOWED` | 主机/socket 不在配置白名单，或主机已被移除 | 在 `cordis.patch.yml` 的 `tmux-xc.config.hosts` 中添加；已移除主机在 **高级详情** 恢复 |
+| `INVALID_ARGUMENT` | 参数非法（如非法目标串、`keys` 含未允许按键、别名超长/含禁用字符） | 按工具描述/表单提示修正参数 |
 | `NOT_FOUND` | 注册表中无此条目 | 确认 key/uri 正确 |
-| `REMOTE_ERROR` | 远端脚本报错 | 看 message 详情 |
+| `PROTOCOL` | 缺少结束标记/协议异常 | 反馈问题；重试 |
+| `CANCELLED` | 操作被取消 | 重试即可（只读） |
+
+**Enter 部分送达的文字**：发送错误的 message 会区分“文本已送达但 Enter 未送达”“只发 Enter 且未送达”“Enter 是否送达未知”三种情况，并给出对应的 capture/重试建议；不要把它误读成“整次发送成功”。
+
+`/compact`（上下文重置）后插件会自动向 agent 重新播报本会话的引用（含别名），agent 会在操作前重新解析；也可让 agent 用 `tmux_xc_references` 主动取回。**永远不要**按会话名或数字 id 猜目标。
+
+## 13. 多会话协作示例（A / B）
+
+已实测通过（0.1.0 基线）：会话 A 通过 ssh 创建会话 `demo-a`；会话 B 从面板引用窗格 `%3`，经审批后发送 `echo hello-from-B`，**只有该窗格**收到；刷新页面、执行 `/compact` 后依然可用。
+
+- **会话 A（创建/采纳方）**：`tmux_xc_create`（或 `tmux_xc_adopt`）→ 得到注册条目，面板出现已创建/已采纳徽标。
+- **会话 A（收尾）**：可给目标设别名（面板或 `tmux_xc_alias`），便于 B 在面板里认出任务。
+- **会话 B（使用方）**：面板引用 `%3` → 输入框出现芯片 → 发送指令 → 按需审批 → agent `tmux_xc_send` 只作用于 `%3`。
+- 跨会话隔离：两个会话并发操作不同窗格互不串扰。
