@@ -444,33 +444,40 @@ test('openRegistry rejects a missing facility and a bad scope', async () => {
 
 test('settings round-trip stores only overrides and merges/clears them', async () => {
   const registry = memoryRegistry();
-  assert.deepEqual(await registry.getSettings(), { approval: {} });
+  assert.deepEqual(await registry.getSettings(), {});
 
-  const first = await registry.setSettings({ approval: { create: 'ask', send: 'allow' } });
-  assert.deepEqual(first, { approval: { create: 'ask', send: 'allow' } });
-  assert.deepEqual(await registry.getSettings(), { approval: { create: 'ask', send: 'allow' } });
+  const first = await registry.setSettings({ approval: { enabled: false } });
+  assert.deepEqual(first, { approval: { enabled: false } });
+  assert.deepEqual(await registry.getSettings(), { approval: { enabled: false } });
 
-  const merged = await registry.setSettings({ approval: { send: 'ask', detach: 'allow' } });
-  assert.deepEqual(merged, { approval: { create: 'ask', send: 'ask', detach: 'allow' } });
+  const merged = await registry.setSettings({ removedHosts: ['a', 'b'] });
+  assert.deepEqual(merged, { approval: { enabled: false }, removedHosts: ['a', 'b'] });
+  assert.deepEqual(await registry.getSettings(), { approval: { enabled: false }, removedHosts: ['a', 'b'] });
 
-  // A key set to null removes the stored override.
-  const cleared = await registry.setSettings({ approval: { send: null } });
-  assert.deepEqual(cleared, { approval: { create: 'ask', detach: 'allow' } });
-  assert.deepEqual(await registry.getSettings(), { approval: { create: 'ask', detach: 'allow' } });
+  // A null enabled clears the stored switch override.
+  const cleared = await registry.setSettings({ approval: { enabled: null } });
+  assert.deepEqual(cleared, { removedHosts: ['a', 'b'] });
+
+  // A shorter removedHosts list replaces (restores) the removed hosts.
+  assert.deepEqual(await registry.setSettings({ removedHosts: ['a'] }), { removedHosts: ['a'] });
+  assert.deepEqual(await registry.getSettings(), { removedHosts: ['a'] });
 });
 
-test('setSettings rejects kill, unknown keys and non-ask/allow values', async () => {
+test('setSettings rejects unknown fields and malformed values', async () => {
   const registry = memoryRegistry();
   for (const input of [
     null,
     [],
-    {},
     { approval: null },
     { approval: [] },
+    { approval: { enabled: 'yes' } },
+    { approval: { enabled: 1 } },
     { approval: { kill: 'allow' } },
-    { approval: { create: 'ask', other: 'allow' } },
-    { approval: { create: 'sometimes' } },
-    { approval: { send: 1 } },
+    { approval: { create: 'ask' } },
+    { approval: { other: true } },
+    { removedHosts: 'a' },
+    { removedHosts: [1] },
+    { removedHosts: [''] },
     { ui: {} },
   ]) {
     await assert.rejects(() => registry.setSettings(input), { code: 'INVALID_ARGUMENT' }, JSON.stringify(input));
@@ -509,4 +516,56 @@ test('aliases are keyed by resource key and updatedAt is preserved', async () =>
   assert.equal(list.length, 1);
   assert.equal(list[0].key, paneKey);
   assert.equal(typeof list[0].updatedAt, 'number');
+});
+
+test('purgeHost removes resources and aliases of one host and returns counts', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  const otherKey = resourceKey({ ...paneRef, pid: 8 });
+  await registry.resourceUpsert(entry({ uri: encodeRef({ ...paneRef, pid: 8 }) }));
+  await registry.setAlias(paneKey, 'editor');
+  await registry.setAlias(otherKey, 'other');
+
+  const foreignRef = { ...paneRef, hostId: 'otherhost', pid: 9 };
+  const foreignKey = resourceKey(foreignRef);
+  await registry.resourceUpsert(entry({ uri: encodeRef(foreignRef) }));
+  await registry.setAlias(foreignKey, 'keep');
+
+  assert.deepEqual(await registry.purgeHost(HOST), { resources: 2, aliases: 2 });
+  assert.equal(registry.resourceGet(paneKey), undefined);
+  assert.equal(registry.resourceGet(otherKey), undefined);
+  assert.deepEqual((await registry.aliasList()).map((item) => item.key), [foreignKey]);
+  assert.equal(registry.resourceGet(foreignKey).hostId, 'otherhost');
+  assert.deepEqual(registry.hostCounts('otherhost'), { resources: 1, aliases: 1 });
+});
+
+test('version bumps on every resource/alias/settings/purge mutation only', async () => {
+  const registry = memoryRegistry();
+  assert.equal(registry.version, 0);
+
+  await registry.resourceUpsert(entry());
+  assert.equal(registry.version, 1);
+  await registry.resourceUpsert(entry({ labels: { window: 'renamed' } }));
+  assert.equal(registry.version, 2);
+  await registry.setAlias(paneKey, 'editor');
+  assert.equal(registry.version, 3);
+  await registry.setAlias(paneKey, null);
+  assert.equal(registry.version, 4);
+  await registry.setSettings({ approval: { enabled: false } });
+  assert.equal(registry.version, 5);
+  await registry.resourceForget(paneKey);
+  assert.equal(registry.version, 6);
+
+  // Read-only calls and inventory side effects must not bump the version.
+  await registry.markVerified(HOST, 'default', inventory(), T0);
+  await registry.markUnreachable(HOST, { code: 'HOST_UNREACHABLE', message: 'x' }, T0);
+  assert.equal(registry.version, 6);
+
+  await registry.resourceUpsert(entry());
+  const before = registry.version;
+  await registry.purgeHost(HOST);
+  assert.equal(registry.version, before + 1);
+  // A no-op forget is not a mutation.
+  await registry.resourceForget(paneKey);
+  assert.equal(registry.version, before + 1);
 });

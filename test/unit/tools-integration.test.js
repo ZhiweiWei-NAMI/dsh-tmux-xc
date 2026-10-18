@@ -30,8 +30,9 @@ function execution(name = 'tmux_xc_send', args) {
     agent: { session: { id: 'chat' } }, signal: controller.signal, controller,
   };
 }
-// These boundary tests exercise the ask/pin mechanism, so default them to ask
-// (the allow/allow/ask built-in defaults are covered by tools-policy.test.js).
+// These boundary tests exercise the ask/pin mechanism; the switch defaults to ON
+// (enabled absent -> true), so every action asks. The legacy per-key values are
+// ignored except 'allow' (covered by tools-policy.test.js).
 function setup(service = {}, config = { approval: { create: 'ask', send: 'ask', detach: 'ask' } }) {
   const tools = new Map();
   const listeners = new Map();

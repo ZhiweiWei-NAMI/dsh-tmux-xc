@@ -2,33 +2,41 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerRoutes } from '../../lib/routes.js';
 import { encodeRef } from '../../lib/core/uri.js';
-import { XcError } from '../../lib/core/errors.js';
+import { XcError, CODES } from '../../lib/core/errors.js';
 
 const uri = encodeRef({ hostId: 'lab', hostFp: 'abcdef123456', socketId: 'named', gen: '123-456', kind: 'pane', sid: 0, wid: 0, pid: 0 });
 const entry = { uri, token: `@[Lab · demo:0.0 %0](${uri})`, label: 'Lab · demo:0.0 %0', key: 'key', origin: 'adopted', state: 'live' };
 
-function registryState() {
-  const approval = {};
-  const aliases = new Map();
-  return {
-    getSettings: async () => ({ approval: { ...approval } }),
-    setSettings: async ({ approval: incoming }) => {
-      for (const [key, value] of Object.entries(incoming)) {
-        if (value === null) delete approval[key];
-        else approval[key] = value;
+function registryState(overrides = {}) {
+  const state = { approvalEnabled: undefined, removedHosts: [], aliases: new Map(), version: 0, ...overrides };
+  const registry = {
+    getSettings: async () => ({
+      ...(typeof state.approvalEnabled === 'boolean' ? { approval: { enabled: state.approvalEnabled } } : {}),
+      ...(state.removedHosts.length ? { removedHosts: [...state.removedHosts] } : {}),
+    }),
+    setSettings: async (input) => {
+      if (input.approval !== undefined) {
+        state.approvalEnabled = input.approval.enabled === null ? undefined : input.approval.enabled;
       }
-      return { approval: { ...approval } };
+      if (input.removedHosts !== undefined) state.removedHosts = [...input.removedHosts];
+      state.version += 1;
+      return registry.getSettings();
     },
-    aliasList: async () => [...aliases].map(([key, value]) => ({ key, alias: value.alias, updatedAt: value.updatedAt })),
+    aliasList: async () => [...state.aliases].map(([key, value]) => ({ key, alias: value.alias, updatedAt: value.updatedAt })),
     setAlias: async (key, alias) => {
       if (alias === null) {
-        aliases.delete(key);
+        state.aliases.delete(key);
         return { key, alias: null };
       }
-      aliases.set(key, { alias, updatedAt: 1 });
+      state.aliases.set(key, { alias, updatedAt: 1 });
       return { key, alias };
     },
+    removedHosts: () => [...state.removedHosts],
+    get version() {
+      return state.version;
+    },
   };
+  return registry;
 }
 
 function fixture(overrides = {}) {
@@ -41,6 +49,11 @@ function fixture(overrides = {}) {
     inventory: async (args) => { calls.push(args); return { hosts: [] }; },
     adopt: async (args) => { calls.push(args); return entry; },
     forget: async (args) => { calls.push(args); return true; },
+    alias: async (args) => { calls.push(args); return { key: 'key', alias: args.alias, entry: { uri, token: entry.token, label: entry.label } }; },
+    capture: async (args) => { calls.push(args); return { text: 'hi', truncated: false, lines: args.lines, target: 'Lab · 窗格 demo:0.0 %0', kind: 'pane' }; },
+    kill: async (args) => { calls.push(args); return { killed: true, target: 'Lab · 窗格 demo:0.0 %0' }; },
+    removePlan: async (args) => { calls.push(args); return { host: { id: 'lab', label: 'Lab', reachable: true }, sessions: [], registryEntries: 0, aliases: 0 }; },
+    removeHost: async (args) => { calls.push(args); return { removed: true, remote: null }; },
     resolveRef: async () => ({ ref: { hostId: 'lab' }, result: { code: 'TARGET_GONE', warnings: [] } }),
     config: { approval: {} },
     registry,
@@ -59,15 +72,27 @@ function fixture(overrides = {}) {
 
 test('hosts exposes validated transport and both socket selectors for attach', async () => {
   const { request, hosts } = fixture();
-  assert.deepEqual(await request('hosts'), { status: 200, body: { ok: true, hosts } });
+  assert.deepEqual(await request('hosts', undefined, 'GET'), { status: 200, body: { ok: true, hosts } });
 });
 
 test('inventory uses the v2 host query parameter', async () => {
   const { request, calls } = fixture();
-  await request('inventory?host=lab&workspace=%2Fproject&all=1');
+  await request('inventory?host=lab&workspace=%2Fproject&all=1', undefined, 'GET');
   assert.equal(calls[0].hostId, 'lab');
   assert.equal(calls[0].workspace, '/project');
   assert.equal(calls[0].all, true);
+});
+
+test('inventory strips the legacy reachable flag and preserves service alias decoration', async () => {
+  const node = { key: 'pane-key', uri, label: 'Lab · 窗格 demo:0.0 %0', alias: 'editor', aliasSource: 'local' };
+  const { request } = fixture({
+    inventory: async () => ({ hosts: [{ id: 'lab', label: 'Lab', reachable: true, sockets: [{ id: 'named', sessions: [{ windows: [{ panes: [node] }] }] }] }] }),
+  });
+  const response = await request('inventory', undefined, 'GET');
+  assert.equal(response.status, 200);
+  const host = response.body.hosts[0];
+  assert.equal(Object.hasOwn(host, 'reachable'), false);
+  assert.deepEqual(host.sockets[0].sessions[0].windows[0].panes[0], node);
 });
 
 test('adopt accepts only durable uri and wraps the canonical entry', async () => {
@@ -88,7 +113,7 @@ for (const code of ['SERVER_RESTARTED', 'TARGET_GONE', 'HOST_IDENTITY_CHANGED', 
 
 test('resolve returns flat result without undefined or absent target fields', async () => {
   const { request } = fixture();
-  assert.deepEqual(await request(`resolve?uri=${encodeURIComponent(uri)}`), {
+  assert.deepEqual(await request(`resolve?uri=${encodeURIComponent(uri)}`, undefined, 'GET'), {
     status: 200, body: { ok: true, code: 'TARGET_GONE', warnings: [] },
   });
 });
@@ -99,92 +124,154 @@ test('forget returns removed and rejects conflicting selectors', async () => {
   assert.equal((await request('forget', { uri, key: 'key' })).status, 400);
 });
 
-test('unavailable durable registry fails every route closed', async () => {
-  const { request } = fixture({ assertAvailable() { throw new XcError('REGISTRY_UNAVAILABLE', 'registry unavailable'); } });
-  for (const path of ['hosts', 'inventory', 'settings', `resolve?uri=${encodeURIComponent(uri)}`]) {
-    const response = await request(path);
-    assert.equal(response.status, 503);
-    assert.equal(response.body.error.code, 'REGISTRY_UNAVAILABLE');
-  }
-  for (const [path, body, method] of [['adopt', { target: uri }], ['forget', { uri }], ['settings', { approval: { send: 'allow' } }, 'PUT'], ['alias', { key: 'key', alias: 'x' }]]) {
-    assert.equal((await request(path, body, method)).body.error.code, 'REGISTRY_UNAVAILABLE');
-  }
-});
-
-test('settings GET reports defaults with fixed kill source', async () => {
+test('settings GET reports the switch, its source and legacy allow keys', async () => {
   const { request } = fixture();
-  assert.deepEqual(await request('settings'), {
+  assert.deepEqual(await request('settings', undefined, 'GET'), {
     status: 200, body: { ok: true,
-      approval: { create: 'allow', send: 'allow', detach: 'ask', kill: 'ask' },
-      source: { create: 'default', send: 'default', detach: 'default', kill: 'fixed' } },
+      approval: { enabled: true, source: 'default', legacyAllow: [] },
+      removedHosts: [] },
   });
 });
 
-test('settings PUT merges overrides and clears back to config/default on null', async () => {
-  const { request } = fixture({ config: { approval: { create: 'ask' } } });
-  assert.deepEqual(await request('settings', { approval: { send: 'allow' } }, 'PUT'), {
+test('settings PUT toggles enabled and clears back to config', async () => {
+  const { request } = fixture({ config: { approval: { enabled: false, create: 'allow' } } });
+  assert.deepEqual(await request('settings', { approval: { enabled: true } }, 'PUT'), {
     status: 200, body: { ok: true,
-      approval: { create: 'ask', send: 'allow', detach: 'ask', kill: 'ask' },
-      source: { create: 'config', send: 'panel', detach: 'default', kill: 'fixed' } },
+      approval: { enabled: true, source: 'panel', legacyAllow: ['create'] },
+      removedHosts: [] },
   });
-  // Clearing the panel override falls back to the configured value.
-  assert.deepEqual(await request('settings', { approval: { send: null } }, 'PUT'), {
+  assert.deepEqual(await request('settings', { approval: { enabled: null } }, 'PUT'), {
     status: 200, body: { ok: true,
-      approval: { create: 'ask', send: 'allow', detach: 'ask', kill: 'ask' },
-      source: { create: 'config', send: 'default', detach: 'default', kill: 'fixed' } },
+      approval: { enabled: false, source: 'config', legacyAllow: ['create'] },
+      removedHosts: [] },
   });
 });
 
-test('settings PUT rejects kill and unknown fields with 400', async () => {
+test('settings PUT restores removed hosts but rejects adding new ones', async () => {
+  const { request, registry } = fixture();
+  await registry.setSettings({ removedHosts: ['lab', 'other'] });
+  assert.deepEqual(await request('settings', { removedHosts: ['lab'] }, 'PUT'), {
+    status: 200, body: { ok: true,
+      approval: { enabled: true, source: 'default', legacyAllow: [] },
+      removedHosts: ['lab'] },
+  });
+  const rejected = await request('settings', { removedHosts: ['lab', 'added'] }, 'PUT');
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error.code, 'INVALID_ARGUMENT');
+});
+
+test('settings PUT rejects unknown and malformed fields', async () => {
   const { request } = fixture();
-  for (const approval of [
-    { kill: 'allow' },
-    { create: 'ask', other: 'allow' },
-    { create: 'sometimes' },
-    { send: 1 },
+  for (const body of [
+    { approval: { kill: 'allow' } },
+    { approval: { create: 'ask' } },
+    { approval: { enabled: 'yes' } },
+    { approval: { other: 1 } },
+    { removedHosts: 'lab' },
+    { removedHosts: ['', 1] },
+    { ui: {} },
   ]) {
-    const response = await request('settings', { approval }, 'PUT');
-    assert.equal(response.status, 400, JSON.stringify(approval));
+    const response = await request('settings', body, 'PUT');
+    assert.equal(response.status, 400, JSON.stringify(body));
     assert.equal(response.body.error.code, 'INVALID_ARGUMENT');
   }
-  assert.equal((await request('settings', { ui: {} }, 'PUT')).status, 400);
 });
 
-test('alias POST sets and clears an alias with route-level validation', async () => {
-  const { request } = fixture();
-  assert.deepEqual(await request('alias', { key: 'key', alias: 'My Pane' }), {
-    status: 200, body: { ok: true, key: 'key', alias: 'My Pane' },
+test('alias POST adopts-if-needed through the service and returns key/alias/entry', async () => {
+  const { request, calls } = fixture();
+  assert.deepEqual(await request('alias', { uri, alias: 'My Pane' }), {
+    status: 200, body: { ok: true, key: 'key', alias: 'My Pane', entry: { uri, token: entry.token, label: entry.label } },
   });
-  assert.deepEqual(await request('alias', { key: 'key', alias: null }), {
-    status: 200, body: { ok: true, key: 'key', alias: null },
-  });
-  // An empty string also removes the alias.
-  assert.deepEqual(await request('alias', { key: 'key', alias: '' }), {
-    status: 200, body: { ok: true, key: 'key', alias: null },
-  });
-  assert.equal((await request('alias', { key: 'key' })).status, 400);
-  assert.equal((await request('alias', { key: 'key', alias: 'x', other: 1 })).status, 400);
-  assert.equal((await request('alias', { key: '', alias: 'x' })).status, 400);
+  assert.equal(calls[0].uri, uri);
+  assert.equal(calls[0].alias, 'My Pane');
+  assert.equal((await request('alias', { uri, alias: null })).status, 200);
+  assert.equal((await request('alias', { uri, alias: 'x', other: 1 })).status, 400);
+  assert.equal((await request('alias', { uri: 'not-a-uri', alias: 'x' })).status, 400);
+  assert.equal((await request('alias', { alias: 'x' })).status, 400);
 });
 
-test('inventory decorates session/window/pane nodes with their alias', async () => {
-  const node = { key: 'pane-key', uri, label: 'Lab · 窗格 demo:0.0 %0' };
-  const { request } = fixture({
-    registry: {
-      getSettings: async () => ({ approval: {} }),
-      setSettings: async () => ({ approval: {} }),
-      setAlias: async (key, alias) => ({ key, alias }),
-      aliasList: async () => [{ key: 'pane-key', alias: 'editor', updatedAt: 1 }],
-    },
-    inventory: async () => ({ hosts: [{
-      id: 'lab', label: 'Lab',
-      sockets: [{ id: 'named', server: { gen: '1-2' }, sessions: [{ key: 'session-key', windows: [{ key: 'window-key', panes: [node] }] }] }],
-    }] }),
-  });
-  const response = await request('inventory');
+test('version returns the registry version without touching ssh', async () => {
+  const { request, registry, calls } = fixture();
+  await registry.setSettings({ approval: { enabled: true } });
+  assert.deepEqual(await request('version', undefined, 'GET'), { status: 200, body: { ok: true, version: 1 } });
+  assert.equal(calls.length, 0, 'version must not call any service operation');
+});
+
+test('capture route returns OK with label/kind/text and bounds lines to [1, 500]', async () => {
+  const { request, calls } = fixture();
+  const response = await request(`capture?uri=${encodeURIComponent(uri)}&lines=300`, undefined, 'GET');
   assert.equal(response.status, 200);
-  const sessions = response.body.hosts[0].sockets[0].sessions;
-  assert.equal(sessions[0].alias, undefined, 'no alias set on the session node');
-  assert.equal(sessions[0].windows[0].alias, undefined, 'no alias set on the window node');
-  assert.equal(sessions[0].windows[0].panes[0].alias, 'editor', 'pane node gets its alias');
+  assert.deepEqual(response.body, { ok: true, code: 'OK', label: 'Lab · 窗格 demo:0.0 %0', kind: 'pane', text: 'hi', truncated: false });
+  assert.equal(calls[0].uri, uri);
+  assert.equal(calls[0].lines, 300);
+
+  await request(`capture?uri=${encodeURIComponent(uri)}&lines=999`, undefined, 'GET');
+  assert.equal(calls[1].lines, 500);
+  await request(`capture?uri=${encodeURIComponent(uri)}&lines=0`, undefined, 'GET');
+  assert.equal(calls[2].lines, 1);
+  assert.equal((await request(`capture?uri=${encodeURIComponent(uri)}&lines=abc`, undefined, 'GET')).status, 400);
+  assert.equal((await request('capture', undefined, 'GET')).status, 400, 'uri is required');
+});
+
+test('capture route reports resolution outcomes as HTTP 200 with code', async () => {
+  const { request } = fixture({ capture: async () => { throw new XcError(CODES.TARGET_GONE, 'pane gone'); } });
+  const response = await request(`capture?uri=${encodeURIComponent(uri)}`, undefined, 'GET');
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { ok: true, code: 'TARGET_GONE', message: 'pane gone' });
+});
+
+test('kill route returns killed/label and maps confirm mismatch to 400', async () => {
+  const { request, calls } = fixture();
+  assert.deepEqual(await request('kill', { uri, confirm: 'lab:named:%0' }), {
+    status: 200, body: { ok: true, killed: true, label: 'Lab · 窗格 demo:0.0 %0' },
+  });
+  assert.equal(calls[0].uri, uri);
+  assert.equal(calls[0].confirm, 'lab:named:%0');
+
+  const mismatch = fixture({ kill: async () => { throw new XcError(CODES.CONFIRM_MISMATCH, 'bad confirm'); } });
+  const response = await mismatch.request('kill', { uri, confirm: 'wrong' });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'CONFIRM_MISMATCH');
+});
+
+test('host/remove-plan forwards the host id', async () => {
+  const { request, calls } = fixture();
+  assert.deepEqual(await request('host/remove-plan?host=lab', undefined, 'GET'), {
+    status: 200, body: { ok: true, host: { id: 'lab', label: 'Lab', reachable: true }, sessions: [], registryEntries: 0, aliases: 0 },
+  });
+  assert.equal(calls[0].hostId, 'lab');
+});
+
+test('host/remove validates the body and forwards to the service', async () => {
+  const { request, calls } = fixture();
+  assert.deepEqual(await request('host/remove', { host: 'lab', mode: 'local', confirm: 'lab' }), {
+    status: 200, body: { ok: true, removed: true, remote: null },
+  });
+  assert.equal(calls[0].host, 'lab');
+  assert.equal(calls[0].mode, 'local');
+  assert.equal(calls[0].confirm, 'lab');
+  assert.equal(calls[0].killUris, undefined);
+
+  assert.equal((await request('host/remove', { host: 'lab', mode: 'weird', confirm: 'lab' })).status, 400);
+  assert.equal((await request('host/remove', { host: 'lab', mode: 'remote', killUris: 'x', confirm: 'lab' })).status, 400);
+  assert.equal((await request('host/remove', { host: 'lab', mode: 'remote' })).status, 400, 'confirm is required');
+});
+
+test('unavailable durable registry fails every route closed', async () => {
+  const { request } = fixture({ assertAvailable() { throw new XcError('REGISTRY_UNAVAILABLE', 'registry unavailable'); } });
+  for (const path of ['hosts', 'inventory', 'settings', 'version', `resolve?uri=${encodeURIComponent(uri)}`, `capture?uri=${encodeURIComponent(uri)}`]) {
+    const response = await request(path, undefined, 'GET');
+    assert.equal(response.status, 503, path);
+    assert.equal(response.body.error.code, 'REGISTRY_UNAVAILABLE', path);
+  }
+  for (const [path, body, method] of [
+    ['adopt', { target: uri }],
+    ['forget', { uri }],
+    ['settings', { approval: { enabled: true } }, 'PUT'],
+    ['alias', { uri, alias: 'x' }],
+    ['kill', { uri, confirm: 'lab:named:%0' }],
+    ['host/remove', { host: 'lab', mode: 'local', confirm: 'lab' }],
+  ]) {
+    assert.equal((await request(path, body, method)).body.error.code, 'REGISTRY_UNAVAILABLE', path);
+  }
 });
