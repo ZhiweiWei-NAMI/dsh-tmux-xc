@@ -9,7 +9,7 @@ const pure = globalThis.__dshTmuxXcPure;
 
 test('client-pure: pure builders are exported for Node evaluation', () => {
   assert.ok(pure, 'globalThis.__dshTmuxXcPure should be defined');
-  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell']) {
+  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString']) {
     assert.equal(typeof pure[name], 'function', `${name} should be a function`);
   }
 });
@@ -87,4 +87,23 @@ test('attachCommandPowerShell: matches the documented pane example shape', () =>
 
 test('attachCommandPowerShell: local transport is not supported (no ssh alias)', () => {
   assert.equal(pure.attachCommandPowerShell({ kind: 'session', sid: 1 }, localHost, { name: 'xc' }), null);
+});
+
+// killConfirmString mirrors lib/core/uri.js `targetString(ref)`, which the
+// POST /api/tmux-xc/kill route requires as `confirm` (hostId:socketId:$sid / @wid / %pid).
+test('killConfirmString: mirrors targetString for session/window/pane', () => {
+  assert.equal(pure.killConfirmString({ kind: 'session', hostId: 'lab', socketId: 'default', sid: 3 }), 'lab:default:$3');
+  assert.equal(pure.killConfirmString({ kind: 'window', hostId: 'lab', socketId: 'xc', sid: 3, wid: 5 }), 'lab:xc:@5');
+  assert.equal(pure.killConfirmString({ kind: 'pane', hostId: 'lab', socketId: 'xc', sid: 1, wid: 2, pid: 7 }), 'lab:xc:%7');
+});
+
+test('killConfirmString: rejects invalid ids / kinds / missing fields', () => {
+  assert.equal(pure.killConfirmString(null), null);
+  assert.equal(pure.killConfirmString({}), null);
+  assert.equal(pure.killConfirmString({ kind: 'session', socketId: 'default', sid: 3 }), null); // no hostId
+  assert.equal(pure.killConfirmString({ kind: 'session', hostId: 'lab', sid: 3 }), null); // no socketId
+  assert.equal(pure.killConfirmString({ kind: 'session', hostId: 'lab', socketId: 'default', sid: null }), null);
+  assert.equal(pure.killConfirmString({ kind: 'window', hostId: 'lab', socketId: 'default', sid: 3 }), null); // no wid
+  assert.equal(pure.killConfirmString({ kind: 'pane', hostId: 'lab', socketId: 'default', sid: 1, wid: 2 }), null); // no pid
+  assert.equal(pure.killConfirmString({ kind: 'server', hostId: 'lab', socketId: 'default' }), null);
 });
