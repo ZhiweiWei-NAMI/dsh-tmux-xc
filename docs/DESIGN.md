@@ -101,10 +101,10 @@ Input operations (`send`) require resolving to exactly one pane: pane refs direc
 
 One storage domain opened once by the host service (`ctx.storage.domain.open(spec)`), JSON backend under `$DSH_HOME/storages`, `layout: 'per-record'`.
 
-- Domain name: `dsh-tmux-xc` when `registryScope: user` (shared by every conversation and profile of this OS user's `$DSH_HOME`); `dsh-tmux-xc.p.<profileName>` when `registryScope: profile` (profile from `ctx.get('profileContext')?.name`; falls back to `user` with a warning).
+- Domain name (DSH unit names must match `^[a-z][a-z0-9_]*$`): `dsh_tmux_xc` when `registryScope: user` (shared by every conversation and profile of this OS user's `$DSH_HOME`); `dsh_tmux_xc_p_<profile>` when `registryScope: profile` (profile from `ctx.get('profileContext')?.name`; falls back to `user` with a warning).
 - Tables (zod schemas in `lib/registry.js`):
   - `hosts` key `hostId` → `{hostId, fp, user, uid, firstSeenAt, lastVerifiedAt, lastError?}` — fp pinned on first verification; later mismatch = `HOST_IDENTITY_CHANGED` until the user forgets the host record.
-  - `resources` key `<hostId>~<socketId>~<gen>~<kind><num>` → `{key, uri, kind, hostId, hostFp, socketId, gen, sid, wid, pid, labels{session,window,pane}, meta{cwd,cmd,attached,dead,width,height}, origin: created|adopted, by{sessionId, at}, workspaces[], state: live|stale|unreachable, staleReason?, lastVerifiedAt}`
+  - `resources` key `resourceKey(ref)` (length-prefixed, `[A-Za-z0-9_-]+`, e.g. `h7_namilab_s7_default_g2893481-1792293185_p7`) → `{key, uri, kind, hostId, hostFp, socketId, gen, sid, wid, pid, labels{session,window,pane}, meta{cwd,cmd,attached,dead,width,height}, origin: created|adopted, by{sessionId, at}, workspaces[], state: live|stale|unreachable, staleReason?, lastVerifiedAt}`
   - `conversations` key `<sanitized sessionId>` → `{sessionId, refs:[{uri, label, firstSeenAt}], announcedAt?}`
 - All compound writes use `table.update` (per-domain write chain). Only one DSH process should own a `$DSH_HOME` registry (JSON backend is last-write-wins across processes) — documented limitation.
 - Workspace filter: entries carry `workspaces` (workspace path/id of the creating/adopting chat); list APIs accept `workspace` and `all`.

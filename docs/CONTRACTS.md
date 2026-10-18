@@ -9,7 +9,7 @@ export class XcError extends Error {
 }
 export const CODES = { HOST_NOT_ALLOWED, SOCKET_NOT_ALLOWED, HOST_UNREACHABLE, SSH_AUTH, SSH_HOSTKEY,
   REMOTE_TOOL_MISSING, TIMEOUT, CANCELLED, PROTOCOL, OUTCOME_UNKNOWN, SERVER_GONE, SERVER_RESTARTED,
-  HOST_IDENTITY_CHANGED, TARGET_GONE, AMBIGUOUS, INVALID_ARGUMENT, REMOTE_ERROR, NOT_FOUND, CONFIRM_MISMATCH }
+  HOST_IDENTITY_CHANGED, TARGET_GONE, AMBIGUOUS, INVALID_ARGUMENT, REMOTE_ERROR, NOT_FOUND, CONFIRM_MISMATCH, SSH_MISSING }
 // values equal their names
 ```
 
@@ -100,7 +100,7 @@ export function formatToken(label, uri): string                // `@[${tokenSafe
 export const TOKEN_RE: RegExp                                  // global regex matching tokens; groups: label, uri
 export function findTokens(text): Array<{ start, end, label, uri, ref }>   // only valid decodes
 export function targetString(ref): string                      // "<hostId>:<socketId>:%7" | ":@5" | ":$3" | ":server"
-export function resourceKey(ref): string                       // "<hostId>~<socketId>~<gen>~p7" (path-safe)
+export function resourceKey(ref): string                       // "h7_namilab_s7_default_g<gen>_p7" ([A-Za-z0-9_-]+, DSH SAFE_KEY_RE)
 ```
 
 ## lib/core/identity.js (WP2)
