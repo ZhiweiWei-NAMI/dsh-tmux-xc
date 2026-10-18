@@ -555,7 +555,7 @@ for (const count of [0, 1, 3]) {
       ['ok', '$3', 'detached', String(count)]];
     const { service } = makeService(transport);
     assert.deepEqual(await service.detach({ uri: ref() }), {
-      detached: count, target: 'NaMILab · train:0.0 %7',
+      detached: count, target: 'NaMILab · 窗格 train:0.0 %7',
     });
     const mutations = transport.calls.filter((call) => call.mutating);
     assert.equal(mutations.length, 1);
@@ -732,7 +732,7 @@ test('inventory and adoption use one full canonical label and token', async () =
   const pane = hosts[0].sockets[0].sessions[0].windows[0].panes[0];
   const entry = await service.adopt({ target: pane.uri, by: { sessionId: 'a' } });
   assert.equal(entry.uri, pane.uri);
-  assert.equal(entry.label, 'NaMILab · train:0.0 %7');
+  assert.equal(entry.label, 'NaMILab · 窗格 train:0.0 %7');
   assert.equal(entry.token, formatToken(entry.label, entry.uri));
   assert.equal(entry.token, pane.token);
   assert.equal(entry.label, pane.label);

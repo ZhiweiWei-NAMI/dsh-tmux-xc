@@ -137,6 +137,43 @@ test('inventory route preserves host error codes and reports thrown internal err
   assert.equal(body.hosts, undefined, 'an internal exception is not a host status');
 });
 
+test('inventory alias lookup is best-effort', async (t) => {
+  for (const mode of ['missing method', 'throws', 'rejects', 'logger throws']) {
+    await t.test(mode, async (t) => {
+      const scope = connectionScope();
+      const pane = { key: 'pane-key', label: 'Pane' };
+      const host = { id: 'local', status: 'ok', reachable: true,
+        sockets: [{ sessions: [{ windows: [{ panes: [pane] }] }] }] };
+      const error = new Error('aliases unavailable');
+      const messages = [];
+      const registry = mode === 'missing method' ? {} : {
+        aliasList() {
+          if (mode === 'rejects') return Promise.reject(error);
+          throw error;
+        },
+      };
+      t.after(registerRoutes(scope.ctx, {
+        registry,
+        logger: { debug(message) {
+          messages.push(message);
+          if (mode === 'logger throws') throw new Error('logger unavailable');
+        } },
+        async inventory() { return { hosts: [host] }; },
+      }));
+      const response = await scope.routes.get('/api/tmux-xc/inventory')
+        .fetch(new Request('http://localhost/api/tmux-xc/inventory'));
+      assert.equal(response.status, 200);
+      const { reachable, ...routeHost } = host;
+      assert.deepEqual(await response.json(), { ok: true, hosts: [routeHost] });
+      assert.equal(Object.hasOwn(pane, 'alias'), false);
+      if (mode !== 'missing method') {
+        assert.equal(messages.length, 1);
+        assert.ok(messages[0].includes(error.message));
+      }
+    });
+  }
+});
+
 test('apply registers routes when connection appears later and returns scoped cleanup', async (t) => {
   const { ctx, tools, listeners, injections, warnings, effects } = fakeCtx();
   const activeScopes = new Set();

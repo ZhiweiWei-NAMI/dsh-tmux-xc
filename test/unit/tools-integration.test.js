@@ -202,9 +202,11 @@ for (const invalidation of ['abort', 'result', 'dispose']) {
     const fixture = setup({ describeForApproval: () => new Promise((resolve) => { finishDescription = resolve; }) });
     const exec = execution();
     const pre = fixture.pre(exec);
-    // pre-execute first awaits the upstream allow decision.
-    await Promise.resolve();
-    assert.equal(typeof finishDescription, 'function');
+    // Wait for description entry, not a fixed number of async policy lookups.
+    for (let attempt = 0; typeof finishDescription !== 'function' && attempt < 20; attempt++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(typeof finishDescription, 'function', 'approval description must start');
     if (invalidation === 'abort') exec.controller.abort();
     if (invalidation === 'result') fixture.result(exec, { isError: true });
     if (invalidation === 'dispose') fixture.dispose();
