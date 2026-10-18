@@ -581,14 +581,11 @@ try {
     const dialog = page.locator('.xc-modal[role="dialog"]').last();
     await dialog.waitFor({ timeout: 15000 });
     const dialogText = await dialog.innerText();
-    const confirmString = await dialog.locator('.xc-confirmString').innerText();
     await shot('delete-dialog.png');
 
     out.delete.dialogText = dialogText;
-    out.delete.confirmString = confirmString;
-    await dialog.locator('.xc-confirmInput').fill(confirmString);
-    await page.waitForTimeout(500);
-    const confirm = dialog.locator('.xc-dialogActions button').filter({ hasText: '删除会话' }).first();
+    // 0.1.1: click-confirmed deletion (no typed internal ids); the red button sends the computed confirm.
+    const confirm = dialog.locator('.xc-dialogActions button.xc-danger').first();
     await confirm.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     out.delete.confirmDisabled = await confirm.isDisabled();
     if (!out.delete.confirmDisabled) await confirm.click();
@@ -661,8 +658,15 @@ try {
         checked: !!r.querySelector('input[type="checkbox"]')?.checked,
       })));
 
-      const remoteChoice = dialog.locator('.xc-choice').filter({ hasText: '先终止所选远端会话' }).first();
+      // Click the choice title (clicking the box centre would toggle a checkbox), then re-assert selection.
+      const remoteChoice = dialog.locator('.xc-choice').filter({ hasText: '先终止所选远端会话' }).locator('.xc-choiceTitle').first();
       if (await remoteChoice.count()) await remoteChoice.click();
+      for (let k = 0; k < await rows.count(); k++) {
+        const r = rows.nth(k);
+        const want = (await r.innerText()).includes('rm-sel');
+        const cb = r.locator('input[type="checkbox"]');
+        if ((await cb.isChecked()) !== want) await cb.click();
+      }
       const hint = await dialog.locator('.xc-confirmHint').innerText();
       const hostId = (hint.match(/[：:]\s*(\S+)\s*$/) ?? [])[1] ?? 'lab';
       await dialog.locator('.xc-confirmInput').fill(hostId);
@@ -719,6 +723,11 @@ try {
     out[target] = {};
 
     let chip = null;
+    if (stale) {
+      // Reopen the conversation from the nav phase (titled from its 'reply OK' prompt).
+      await page.locator('[role=treeitem]').filter({ hasText: /Reply OK/i }).first().click();
+      await page.waitForTimeout(4000);
+    }
     if (!stale) {
       await newChat(page);
       await openPanel();
