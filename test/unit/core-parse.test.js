@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
 import { XcError, CODES } from '../../lib/core/errors.js';
+import { parseRecords } from '../../lib/core/transport.js';
 import {
   parseHostRecord,
   hostFingerprint,
@@ -422,6 +423,28 @@ test('C5: submission is pending only while the text tail is on the cursor row', 
   assert.equal(parseSubmission([['cursor', hex('$ ls -la'), '3']], 'echo hi').state, 'cleared');
   // Spaces in the pane row are ignored, matching the visible-tail definition.
   assert.equal(parseSubmission([['cursor', hex('> h  t  o  p'), '3']], 'htop').state, 'pending');
+});
+
+test('C5: framed cursor rows classify cleared and sticky input without native headers', () => {
+  const nonce = '0123456789ab';
+  const frame = (...fields) => `XC1${nonce}\x1f${fields.join(`\x1f${nonce}\x1f`)}\x1e${nonce}\x1e\n`;
+  for (const [row, state] of [['$\n', 'cleared'], ['> \n', 'cleared'], ['> echo hi\n', 'pending']]) {
+    // Successful capture output is guarded, cur, row. The script consumes both
+    // native headers and emits only the row bytes inside a cursor record.
+    const capture = frame('guarded') + frame('cur') + row;
+    const capturedRow = capture.split('\n').slice(2).join('\n');
+    assert.equal(capturedRow, row);
+    const hex = Buffer.from(capturedRow).toString('hex');
+    const stdout = frame('begin') + frame('guarded') + frame('ok', '%7', '7', '1') +
+      frame('guarded') + frame('enter', '7') + frame('cursor', hex, '4') + frame('end');
+    const parsed = parseRecords(stdout, nonce);
+    assert.equal(parsed.sawEnd, true);
+    assert.deepEqual(parseCursorRecord(parsed.records), ['cursor', hex, '4']);
+    assert.deepEqual(parseSubmission(parsed.records, 'echo hi'), { checked: true, state });
+  }
+  // Native cur + raw row is not a substitute for the encoded cursor record.
+  const unencoded = parseRecords(frame('begin') + frame('guarded') + frame('cur') + '$\n' + frame('end'), nonce);
+  assert.equal(parseSubmission(unencoded.records, 'echo hi').state, 'unknown');
 });
 
 test('C5: submission is unknown without a usable probe or a visible tail', () => {

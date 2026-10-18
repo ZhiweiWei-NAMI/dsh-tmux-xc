@@ -423,6 +423,38 @@ test('C5: enter-only and keys-only keep their shape without a needless delay', (
   assert.equal(textOnly.includes('#{cursor_y}'), false);
 });
 
+test('C5: cursor probes consume guarded headers before cursor_y and cur/row output', () => {
+  const raw = sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true });
+  const queues = readable(raw).split('\n').filter((line) => line.includes('tmux -u '));
+  const guarded = `XC1${NONCE}\x1fguarded\x1e${NONCE}\x1e`;
+  const cur = `XC1${NONCE}\x1fcur\x1e${NONCE}\x1e`;
+  // Real tmux success output: guarded + cursor_y, or guarded + cur + pane row.
+  assert.equal(queues.length, 4);
+  assert.ok(queues[2].includes(guarded));
+  assert.ok(queues[3].includes(guarded));
+  assert.ok(queues[3].includes(cur));
+  assert.ok(queues[2].indexOf(guarded) < queues[2].indexOf('#{cursor_y}'));
+  assert.ok(queues[3].indexOf(guarded) < queues[3].indexOf(cur));
+  assert.ok(queues[3].indexOf(cur) < queues[3].indexOf('capture-pane'));
+
+  const first = `"$(printf '%s\\n' "$out" | sed -n '1p')"`;
+  const second = `"$(printf '%s\\n' "$out" | sed -n '2p')"`;
+  const guardCheck = `elif [ ${first} != '${guarded}' ]; then`;
+  assert.equal(raw.split(guardCheck).length - 1, 2, 'both probes require guarded on line 1');
+  assert.ok(raw.includes(`cy=${second}`), 'cursor_y is line 2 after its guard');
+
+  const captureCheck = raw.slice(raw.lastIndexOf(guardCheck));
+  const curCheck = `elif [ ${second} != '${cur}' ]; then`;
+  assert.ok(captureCheck.includes(curCheck), 'cur is line 2, not line 1');
+  assert.ok(captureCheck.indexOf("head -c 1024") < captureCheck.indexOf(curCheck),
+    'a guard refusal is forwarded as a bounded framed record');
+  assert.ok(captureCheck.includes("'PROTOCOL' 'cursor capture header unavailable'"),
+    'a missing cur header fails closed instead of forwarding pane bytes');
+  assert.ok(captureCheck.includes("tail -n +3 | head -c 4096"),
+    'only lines 3 onward are hex encoded as the cursor row');
+  assert.equal(captureCheck.includes('tail -n +2'), false);
+});
+
 test('C5: the cursor-line probe is read-only, bounded and sanitized on the host', () => {
   const raw = sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true });
   const script = readable(raw);
@@ -432,6 +464,7 @@ test('C5: the cursor-line probe is read-only, bounded and sanitized on the host'
   assert.ok(script.includes(`capture-pane -p -J -t "%7" -S '"$cy"' -E '"$cy"'`));
   assert.equal(script.includes(`capture-pane -p -J -t "%7" -S '"$cy"' -E '"$cy"' |`), false);
   assert.ok(script.includes('head -c 4096'));
+  assert.ok(script.includes("tail -n +3 | head -c 4096"), 'exclude both guarded and cur headers');
   assert.ok(script.includes('od -An -v -tx1'));
   const probe = script.slice(script.indexOf('#{cursor_y}'));
   for (const forbidden of ['kill-', 'set-option', 'set-environment', 'source-file', 'respawn-']) {

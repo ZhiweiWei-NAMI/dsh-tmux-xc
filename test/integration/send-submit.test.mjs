@@ -37,7 +37,9 @@ stdin.setEncoding('utf8')
 let line = ''
 const paint = () => process.stdout.write('\r> ' + line + '\x1b[K')
 const report = (marker, value) => {
-  process.stdout.write('\r\n' + JSON.stringify({ marker, value }) + '\r\n')
+  // Replace the input row with a report, then repaint below it. JSON markers
+  // must never remain on the cursor row inspected by the submission heuristic.
+  process.stdout.write('\r\x1b[2K' + JSON.stringify({ marker, value }) + '\r\n')
   paint()
 }
 stdin.on('data', (chunk) => {
@@ -49,16 +51,15 @@ stdin.on('data', (chunk) => {
     return
   }
   if (chunk.includes('\r')) {
-    report('SUBMITTED', line)
+    const submitted = line
     if (!sticky) line = ''
-    paint()
+    report('SUBMITTED', submitted)
     return
   }
   line += printable
   report('TYPED', line)
 })
-process.stdout.write(JSON.stringify({ marker: 'READY' }) + '\r\n')
-paint()
+report('READY')
 process.on('SIGTERM', () => process.exit(0))
 setInterval(() => {}, 60000)
 `
@@ -83,7 +84,7 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     const service = await ctx.makeService()
     t.after(() => service.close())
     const target = startProgram(ctx, uniqueName('ink'))
-    await waitForPaneText(ctx.socketName, target, 'READY', 20000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"READY"', 20000)
 
     const adopted = await adoptPane(service, target)
     const text = `submit ${process.pid} hello`
@@ -94,7 +95,7 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     assert.equal(result.submission.state, 'cleared', JSON.stringify(result.submission))
 
     // The lone Enter chunk submitted the buffered line.
-    await waitForPaneText(ctx.socketName, target, 'SUBMITTED:', 15000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"SUBMITTED"', 15000)
     const captured = capturePane(ctx.socketName, target)
     assert.ok(captured.includes(`"value":"${text}"`), 'the submitted line is the sent text')
     // A paste chunk (text and '\r' together) would have reported PASTE instead.
@@ -108,7 +109,7 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     const service = await ctx.makeService()
     t.after(() => service.close())
     const target = startProgram(ctx, uniqueName('sticky'), true)
-    await waitForPaneText(ctx.socketName, target, 'READY', 20000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"READY"', 20000)
 
     const adopted = await adoptPane(service, target)
     const text = `sticky ${process.pid} pending`
@@ -118,7 +119,7 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     assert.equal(result.submission.checked, true)
     assert.equal(result.submission.state, 'pending', JSON.stringify(result.submission))
     // The program did receive the lone Enter; it just keeps the line buffered.
-    await waitForPaneText(ctx.socketName, target, 'SUBMITTED:', 15000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"SUBMITTED"', 15000)
     assert.ok(capturePane(ctx.socketName, target).includes(text))
   })
 
@@ -128,19 +129,19 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     const service = await ctx.makeService()
     t.after(() => service.close())
     const target = startProgram(ctx, uniqueName('enter'))
-    await waitForPaneText(ctx.socketName, target, 'READY', 20000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"READY"', 20000)
     const adopted = await adoptPane(service, target)
 
     const typed = await service.send({ uri: adopted.uri, text: 'typed-only' })
     assert.deepEqual(typed.delivered, { text: true, keys: 0, enter: false })
     assert.equal(typed.submission.checked, false)
-    await waitForPaneText(ctx.socketName, target, 'TYPED:', 15000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"TYPED"', 15000)
 
     // Enter-only: no inter-step delay is needed and the buffered line submits.
     const entered = await service.send({ uri: adopted.uri, enter: true })
     assert.equal(entered.delivered.enter, true)
     assert.equal(entered.submission.state, 'cleared')
-    await waitForPaneText(ctx.socketName, target, 'SUBMITTED:', 15000)
+    await waitForPaneText(ctx.socketName, target, '"marker":"SUBMITTED"', 15000)
     await waitForPaneText(ctx.socketName, target, '"value":"typed-only"', 15000)
 
     // Keys-only: delivered, but there is no Enter to reason about.
