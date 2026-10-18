@@ -119,7 +119,7 @@ test('parseInventory builds session→window→pane with fresh sanitized labels'
   assert.equal(session.sid, 0);
   assert.equal(session.name, 'train');
   assert.equal(session.created, 1792293000);
-  assert.equal(session.attached, true);
+  assert.equal(session.attached, 1);
   assert.equal(session.windows.length, 1);
   const win = session.windows[0];
   assert.equal(win.wid, 0);
@@ -198,6 +198,9 @@ test('parseInventory counts malformed records and skips them (never defaults to 
     paneRecord({ sid: '' }),
     paneRecord({ sid: '0' }), // tmux always emits $N
     paneRecord({ wid: '@x' }),
+    paneRecord({ sid: '@1' }),
+    paneRecord({ wid: '$1' }),
+    paneRecord({ pid: '@1' }),
     paneRecord({ pid: '%' }),
     paneRecord({ gen: 'not-a-gen' }),
     paneRecord({ gen: '1-2-3' }),
@@ -280,15 +283,26 @@ test('parseInventory never mutates its input records', () => {
   assert.equal(JSON.stringify(records), snapshot);
 });
 
-test('parseInventory parses strict booleans and defaults unknown to false', () => {
-  const inv = parseInventory(
-    inventory([paneRecord({ attached: '7', windowActive: 'yes', paneActive: '2', dead: 'true' })]),
-  );
-  const session = inv.sessions[0];
-  assert.equal(session.attached, false);
-  assert.equal(session.windows[0].active, false);
-  assert.equal(session.windows[0].panes[0].active, false);
-  assert.equal(session.windows[0].panes[0].dead, false);
+test('parseInventory rejects records whose tmux flags are not 0/1', () => {
+  const flags = [
+    { attached: 'yes' },
+    { attached: '-1' },
+    { windowActive: 'x' },
+    { paneActive: 'true' },
+    { dead: '1 ' },
+  ];
+  for (const override of flags) {
+    const inv = parseInventory(inventory([paneRecord(override)]));
+    assert.equal(inv.malformed, 1, JSON.stringify(override));
+    assert.equal(inv.sessions.length, 0);
+  }
+});
+
+test('parseInventory keeps session attached as a client count', () => {
+  const inv = parseInventory(inventory([paneRecord({ attached: '3' })]));
+  assert.equal(inv.sessions[0].attached, 3);
+  const detached = parseInventory(inventory([paneRecord({ attached: '0' })]));
+  assert.equal(detached.sessions[0].attached, 0);
 });
 
 test('parseInventory handles hostile values without forging records', () => {
