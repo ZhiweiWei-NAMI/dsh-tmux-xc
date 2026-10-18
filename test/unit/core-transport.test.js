@@ -8,6 +8,15 @@ import { buildSshArgv, runRemote, parseRecords } from '../../lib/core/transport.
 const NONCE = 'a1b2c3d4e5f6';
 const CFG = { sshPath: 'ssh', connectTimeoutSec: 10 };
 const ALIAS = 'NaMILab';
+const LOCAL_HOST = { id: 'local', transport: 'local' };
+
+// Captured no-server framing, kept literal so this regression needs no shell,
+// tmux server, or record-generation helper.
+const CAPTURED_NOSERVER_OUTPUT =
+  'XC1a1b2c3d4e5f6\x1fbegin\x1ea1b2c3d4e5f6\x1e\n' +
+  'XC1a1b2c3d4e5f6\x1fhost\x1fa1b2c3d4e5f6\x1fmachine-id\x1fa1b2c3d4e5f6\x1f1000\x1fa1b2c3d4e5f6\x1fuser\x1ea1b2c3d4e5f6\x1e\n' +
+  'XC1a1b2c3d4e5f6\x1fnoserver\x1ea1b2c3d4e5f6\x1e\n' +
+  'XC1a1b2c3d4e5f6\x1fend\x1ea1b2c3d4e5f6\x1e\n';
 
 function start(nonce = NONCE) {
   return `XC1${nonce}\x1f`;
@@ -154,6 +163,46 @@ test('buildSshArgv rejects invalid aliases/timeouts instead of interpolating', (
   });
 });
 
+test('buildSshArgv uses only sh -s for local hosts and ignores ssh configuration', () => {
+  assert.deepEqual(buildSshArgv(CFG, undefined, LOCAL_HOST), ['sh', '-s']);
+  assert.deepEqual(buildSshArgv({
+    sshPath: '/unused/ssh',
+    sshConfigFile: '/unused/config',
+    connectTimeoutSec: 0,
+  }, '-invalid alias', { ...LOCAL_HOST, ssh: '-also ignored' }), ['sh', '-s']);
+});
+
+test('buildSshArgv defaults the ssh alias to host.ssh', () => {
+  assert.deepEqual(
+    buildSshArgv(CFG, undefined, { ssh: ALIAS }),
+    buildSshArgv(CFG, ALIAS),
+  );
+});
+
+test('runRemote accepts a config host while retaining the legacy alias option', async () => {
+  for (const host of [LOCAL_HOST, { ssh: ALIAS }, { transport: 'ssh', ssh: ALIAS }]) {
+    const { spawnImpl, calls } = fakeSpawn([succeed(okOutput([['ok']]))]);
+    const result = await runRemote({ cfg: CFG, host, script: 'x', nonce: NONCE, spawnImpl });
+    assert.deepEqual(calls[0].argv, host.transport === 'local' ? ['sh', '-s'] : buildSshArgv(CFG, ALIAS));
+    assert.deepEqual(calls[0].writes, ['x']);
+    assert.deepEqual(result.records, [['ok']]);
+  }
+});
+
+test('captured noserver output parses and returns noserver without PROTOCOL', async () => {
+  const parsed = parseRecords(CAPTURED_NOSERVER_OUTPUT, NONCE);
+  assert.equal(parsed.sawBegin, true);
+  assert.equal(parsed.sawEnd, true);
+  assert.deepEqual(parsed.records, [
+    ['begin'], ['host', 'machine-id', '1000', 'user'], ['noserver'], ['end'],
+  ]);
+  for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
+    const { spawnImpl } = fakeSpawn([succeed(CAPTURED_NOSERVER_OUTPUT)]);
+    const result = await runRemote({ cfg: CFG, ...options, script: 'x', nonce: NONCE, spawnImpl });
+    assert.deepEqual(result.records, [['host', 'machine-id', '1000', 'user'], ['noserver']]);
+  }
+});
+
 test('runRemote writes the script to stdin and returns parsed records', async () => {
   const { spawnImpl, calls } = fakeSpawn([succeed(okOutput([['host', 'm', '1000', 'u'], ['ok', '$3']]))]);
   const result = await runRemote({
@@ -221,6 +270,53 @@ test('runRemote classifies kex/route/dns failures as HOST_UNREACHABLE', async ()
       CODES.HOST_UNREACHABLE,
     );
   }
+});
+
+test('local nonzero exits without end remain protocol failures, never ssh errors or retries', async () => {
+  for (const stderr of [
+    'Permission denied (publickey).\n',
+    'Host key verification failed.\n',
+    'Connection refused\n',
+  ]) {
+    for (const code of [1, 255]) {
+      for (const stdout of [
+        '',
+        rec(['begin']),
+        rec(['begin']) + rec(['err', CODES.REMOTE_ERROR, 'partial error']),
+        rec(['begin']) + rec(['err', CODES.TARGET_GONE, 'partial error']),
+      ]) {
+        for (const mutating of [false, true]) {
+          const { spawnImpl, calls } = fakeSpawn([fail({ code, stdout, stderr })]);
+          await expectCode(runRemote({
+            cfg: CFG, host: LOCAL_HOST, script: 'x', nonce: NONCE, mutating, spawnImpl,
+          }), mutating ? CODES.OUTCOME_UNKNOWN : CODES.PROTOCOL);
+          assert.equal(calls.length, 1);
+        }
+      }
+    }
+  }
+});
+
+test('local nonzero exits with complete framing are REMOTE_ERROR despite ssh-like stderr', async () => {
+  const { spawnImpl } = fakeSpawn([
+    succeed(okOutput([]), { code: 255, stderr: 'Permission denied\n' }),
+  ]);
+  await expectCode(runRemote({
+    cfg: CFG, host: LOCAL_HOST, script: 'x', nonce: NONCE, spawnImpl,
+  }), CODES.REMOTE_ERROR);
+});
+
+test('local sh spawn ENOENT maps to SSH_MISSING for synchronous and asynchronous failures', async () => {
+  const error = Object.assign(new Error('spawn sh ENOENT'), { code: 'ENOENT' });
+  const asyncFailure = fakeSpawn([{
+    onWrite: (child) => queueMicrotask(() => child.finish({ code: null, error })),
+  }]);
+  for (const spawnImpl of [() => { throw error; }, asyncFailure.spawnImpl]) {
+    await expectCode(runRemote({
+      cfg: CFG, host: LOCAL_HOST, script: 'x', nonce: NONCE, spawnImpl,
+    }), CODES.SSH_MISSING);
+  }
+  assert.deepEqual(asyncFailure.calls[0].argv, ['sh', '-s']);
 });
 
 test('runRemote reports SSH_MISSING when ssh cannot be spawned (ENOENT)', async () => {
@@ -353,20 +449,33 @@ test('missing begin record → PROTOCOL for read-only, OUTCOME_UNKNOWN for mutat
   );
 });
 
-test('an err record from the script becomes the matching XcError', async () => {
-  const { spawnImpl } = fakeSpawn([
-    succeed(okOutput([['err', 'TARGET_GONE', 'gone']])),
-  ]);
-  const { spawnImpl: spawnMissing } = fakeSpawn([
-    succeed(okOutput([['err', 'REMOTE_TOOL_MISSING']])),
-  ]);
-  await expectCode(
+test('err records followed by end preserve their XcError code and message', async () => {
+  for (const code of [CODES.TARGET_GONE, CODES.REMOTE_ERROR, CODES.REMOTE_TOOL_MISSING]) {
+    for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
+      for (const mutating of [false, true]) {
+        for (const exitCode of [0, 1, 255]) {
+          const record = ['err', code, 'remote failure detail'];
+          const { spawnImpl } = fakeSpawn([succeed(okOutput([record]), { code: exitCode })]);
+          await assert.rejects(runRemote({
+            cfg: CFG, ...options, script: 'x', nonce: NONCE, mutating, spawnImpl,
+          }), (error) => {
+            assert.ok(error instanceof XcError);
+            assert.equal(error.code, code);
+            assert.equal(error.message, 'remote failure detail');
+            assert.deepEqual(error.details.record, record);
+            return true;
+          });
+        }
+      }
+    }
+  }
+});
+
+test('an err record without a message retains the default remote error message', async () => {
+  const { spawnImpl } = fakeSpawn([succeed(okOutput([['err', CODES.REMOTE_TOOL_MISSING]]))]);
+  await assert.rejects(
     runRemote({ cfg: CFG, alias: ALIAS, script: 'x', nonce: NONCE, spawnImpl }),
-    CODES.TARGET_GONE,
-  );
-  await expectCode(
-    runRemote({ cfg: CFG, alias: ALIAS, script: 'x', nonce: NONCE, spawnImpl: spawnMissing }),
-    CODES.REMOTE_TOOL_MISSING,
+    { code: CODES.REMOTE_TOOL_MISSING, message: 'remote error: REMOTE_TOOL_MISSING' },
   );
 });
 
