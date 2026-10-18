@@ -43,6 +43,8 @@ test/integration/*.mjs  real ssh (loopback sshd) + isolated tmux socket (WP5)
       - id: namilab            # [a-z0-9][a-z0-9_-]{0,31}; stable key used in references
         label: NaMILab         # display only
         ssh: NaMILab           # alias from the user's ssh config; ^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$
+        # transport: local     # only when DSH runs on the tmux host itself: run the same `sh -s` scripts
+        #                      # locally (argv ["sh","-s"]) instead of over ssh; `ssh` is then ignored
         sockets:               # allow-list; default [{id: default}]
           - { id: default }                       # tmux default socket
           - { id: xc, name: xc }                  # tmux -L xc
@@ -101,10 +103,10 @@ Input operations (`send`) require resolving to exactly one pane: pane refs direc
 
 One storage domain opened once by the host service (`ctx.storage.domain.open(spec)`), JSON backend under `$DSH_HOME/storages`, `layout: 'per-record'`.
 
-- Domain name: `dsh-tmux-xc` when `registryScope: user` (shared by every conversation and profile of this OS user's `$DSH_HOME`); `dsh-tmux-xc.p.<profileName>` when `registryScope: profile` (profile from `ctx.get('profileContext')?.name`; falls back to `user` with a warning).
+- Domain name (DSH unit names must match `^[a-z][a-z0-9_]*$`): `dsh_tmux_xc` when `registryScope: user` (shared by every conversation and profile of this OS user's `$DSH_HOME`); `dsh_tmux_xc_p_<profile>` when `registryScope: profile` (profile from `ctx.get('profileContext')?.name`; falls back to `user` with a warning).
 - Tables (zod schemas in `lib/registry.js`):
   - `hosts` key `hostId` → `{hostId, fp, user, uid, firstSeenAt, lastVerifiedAt, lastError?}` — fp pinned on first verification; later mismatch = `HOST_IDENTITY_CHANGED` until the user forgets the host record.
-  - `resources` key `<hostId>~<socketId>~<gen>~<kind><num>` → `{key, uri, kind, hostId, hostFp, socketId, gen, sid, wid, pid, labels{session,window,pane}, meta{cwd,cmd,attached,dead,width,height}, origin: created|adopted, by{sessionId, at}, workspaces[], state: live|stale|unreachable, staleReason?, lastVerifiedAt}`
+  - `resources` key `resourceKey(ref)` (length-prefixed, `[A-Za-z0-9_-]+`, e.g. `h7_namilab_s7_default_g2893481-1792293185_p7`) → `{key, uri, kind, hostId, hostFp, socketId, gen, sid, wid, pid, labels{session,window,pane}, meta{cwd,cmd,attached,dead,width,height}, origin: created|adopted, by{sessionId, at}, workspaces[], state: live|stale|unreachable, staleReason?, lastVerifiedAt}`
   - `conversations` key `<sanitized sessionId>` → `{sessionId, refs:[{uri, label, firstSeenAt}], announcedAt?}`
 - All compound writes use `table.update` (per-domain write chain). Only one DSH process should own a `$DSH_HOME` registry (JSON backend is last-write-wins across processes) — documented limitation.
 - Workspace filter: entries carry `workspaces` (workspace path/id of the creating/adopting chat); list APIs accept `workspace` and `all`.
@@ -125,6 +127,7 @@ argv (no local shell):
 - Retry policy: read-only scripts may retry **once** when ssh fails before producing the `begin` record; mutating scripts are **never** retried or replayed. Abort → terminate ssh; a mutation aborted after spawn reports `OUTCOME_UNKNOWN` with the guidance "verify with capture before retrying".
 - Process: prefer `ctx.subprocess.spawn` (DSH lifecycle, Windows job containment); fall back to `node:child_process.spawn` with `shell:false`, `windowsHide:true`. Collect stdout ≤ 4 MiB, stderr ≤ 64 KiB.
 - tmux invocation in scripts: `tmux -u <socket args>`; socket args `-L <name>` / `-S <path>` from config only.
+- `transport: local` (Linux/macOS DSH on the tmux host): identical scripts and framing, argv `["sh","-s"]`, no ssh options; error classification limited to local spawn failures. Identity (machine-id + uid) is still verified, so a registry shared with an ssh-configured host id cannot be confused.
 
 ## 7. Remote scripts (`lib/core/scripts.js`) — tmux 3.0a floor
 
