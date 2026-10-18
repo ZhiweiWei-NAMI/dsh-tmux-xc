@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerRoutes } from '../../lib/routes.js';
-import { encodeRef } from '../../lib/core/uri.js';
+import { encodeRef, decodeRef } from '../../lib/core/uri.js';
 import { XcError, CODES } from '../../lib/core/errors.js';
 
 const uri = encodeRef({ hostId: 'lab', hostFp: 'abcdef123456', socketId: 'named', gen: '123-456', kind: 'pane', sid: 0, wid: 0, pid: 0 });
@@ -117,6 +117,25 @@ test('resolve returns flat result without undefined or absent target fields', as
     status: 200, body: { ok: true, code: 'TARGET_GONE', warnings: [] },
   });
 });
+
+test('terminal target resolves a fresh exact pane and returns only connection selectors', async () => {
+  const ref = decodeRef(uri); let options;
+  const { request } = fixture({ resolveRef: async (value, opts) => {
+    assert.equal(value, uri); options = opts; return { ref, result: { code: 'OK' } };
+  } });
+  const response = await request('terminal-target', { uri });
+  assert.equal(response.status, 200); assert.equal(options.requirePane, true);
+  assert.deepEqual(response.body, { ok: true, node: ref, host: { transport: 'ssh', ssh: 'LabAlias' }, socket: { name: 'lab.socket' } });
+  assert.equal((await request('terminal-target', { uri, command: 'unexpected' })).status, 400);
+});
+for (const code of ['OK_RELOCATED', 'SERVER_RESTARTED', 'HOST_IDENTITY_CHANGED', 'TARGET_GONE']) {
+  test(`terminal target fails closed for ${code}`, async () => {
+    const { request } = fixture({ resolveRef: async () => ({ ref: decodeRef(uri), result: { code } }) });
+    const response = await request('terminal-target', { uri });
+    assert.equal(response.status, 409); assert.equal(response.body.error.code, code === 'OK_RELOCATED' ? 'TARGET_CHANGED' : code);
+    assert.equal(response.body.host, undefined);
+  });
+}
 
 test('forget returns removed and rejects conflicting selectors', async () => {
   const { request } = fixture();

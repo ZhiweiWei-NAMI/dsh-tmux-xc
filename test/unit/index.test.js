@@ -191,7 +191,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     const dispose = injection.callback(scope.ctx);
     assert.equal(typeof dispose, 'function');
     activeScopes.add(dispose);
-    assert.equal(scope.routes.size, 12);
+    assert.equal(scope.routes.size, 13);
     const route = scope.routes.get('/api/tmux-xc/hosts');
     const response = await route.fetch(new Request('http://localhost/api/tmux-xc/hosts'));
     assert.equal(response.status, 200);
@@ -207,7 +207,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     await dispose(); // Cordis disposes the callback result when connection goes away.
     activeScopes.delete(dispose);
     assert.equal(scope.routes.size, 0);
-    assert.equal(scope.removed.length, 12);
+    assert.equal(scope.removed.length, 13);
     assert.equal(tools.size, 12, 'connection loss must not dispose tools');
   }
 

@@ -2,6 +2,17 @@
 
 All notable changes to **dsh-tmux-xc**. Versions follow the plugin's `package.json`. UI strings are Chinese-first with an English table; this file is English.
 
+## 1.0.0 — 2026-10-18
+
+- Replace the session/window/socket tree with flat, theme-aware task cards grouped by host; preserve exact ancestry and scoped actions in details/menus.
+- Card title and **Open terminal** create a fresh native DSH terminal and attach to the exact pane. Discover the host shell; support SSH from PowerShell or POSIX shells, and local tmux from POSIX shells. Unsupported quoting/shells fail closed.
+- Resolve the durable reference through a new owner-only `terminal-target` preparation route. Check generation and exact session/window/pane in one native tmux command queue before attaching; do not detach other clients.
+- Wait for the native terminal to become writable, submit the attach command once, and never replay on reconnect. Native DSH owns PTY rendering and lifecycle.
+- Keep read-only snapshots and sent-reference navigation separate from interactive terminals.
+- Preserve linked-pane parent actions and fix alias editor placement under filtering; search all linked parent labels.
+- Verification: 565 unit tests; actual component/lifecycle fixture checks; live disposable remote PTY test confirming exact attachment and stale-generation refusal. Fixture checks do not establish installed native DSH end-to-end success.
+- Distribution: GitHub `v1.0.0`; npm publication is separate. Requires the native terminal bundle and the tested DSH 0.2.1-rc.2 runtime. Restart DSH after upgrading host code.
+
 ## 0.1.1 — 2026-10-18
 
 Distribution: [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag **`v0.1.1`**.

@@ -1,7 +1,7 @@
 {
   "name": "dsh-tmux-xc",
-  "version": "0.1.1",
-  "description": "Manage remote tmux tasks across DeepSeek Harness conversations: exact-pane references, read-only snapshots, and approval-controlled agent actions.",
+  "version": "1.0.0",
+  "description": "Remote tmux task cards for DeepSeek Harness: one-click native terminals, exact-pane references, snapshots, and approval-controlled agent actions.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -51,7 +51,8 @@
         "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-input-trigger",
-        "@deepseek-ai/dsh-client-ui-sidebar-right"
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-api-terminal-controller"
       ]
     }
   },
