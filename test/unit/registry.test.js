@@ -96,6 +96,15 @@ test('resourceUpsert stores a normalized entry and merges by key', async () => {
   assert.equal(registry.resourceList().length, 1);
 });
 
+test('resourceUpsert without a state keeps the existing stale state', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  await registry.markUnreachable(HOST, { code: 'HOST_UNREACHABLE', message: 'x' }, T0);
+  const merged = await registry.resourceUpsert(entry({ labels: { session: 'train2' } }));
+  assert.equal(merged.state, 'unreachable');
+  assert.equal(merged.labels.session, 'train2');
+});
+
 test('resourceUpsert rejects malformed entries', async () => {
   const registry = memoryRegistry();
   await assert.rejects(() => registry.resourceUpsert({}), { code: 'INVALID_ARGUMENT' });
