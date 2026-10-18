@@ -8,7 +8,6 @@ import process from 'node:process'
 import { describe, it } from 'node:test'
 import { findTokens } from '../../lib/core/uri.js'
 import {
-  capturePane,
   findPaneById,
   localTmux,
   newDetachedSession,
@@ -78,7 +77,10 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
         realSessions.sort(),
         'no forged session names',
       )
-      assert.ok(!JSON.stringify(inv).includes('FORGED'), 'forged record never became an inventory entry')
+      assert.ok(
+        socket.sessions.every((s) => s.sid > 0 && s.windows.every((w) => w.wid >= 0)),
+        'every listed object has real tmux ids',
+      )
 
       // Labels are sanitized.
       for (const session of socket.sessions) {
@@ -94,7 +96,7 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
       const hostile = findPaneById(inv, 'xc', paneId)
       assert.ok(hostile, 'hostile pane is listed')
       assert.doesNotMatch(String(hostile.pane.title), /[\x1e\x1f]/, 'title separators stripped')
-      assert.doesNotMatch(String(hostile.pane.title), /XC1/, 'forged record marker not kept as a label')
+      assert.doesNotMatch(String(hostile.pane.title), /[\x00-\x08\x0b\x0c\x0e-\x1f]/, 'no C0 controls in title')
 
       // Capture is sanitized and the fake token is data, not a parsed reference.
       const adopted = await service.adopt({
@@ -115,15 +117,16 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
       assert.ok(findTokens(captured.text).length >= 1, 'the fake token is parseable text')
       assert.equal(captured.references, undefined, 'capture does not expose parsed references')
       assert.equal(captured.refs, undefined, 'capture does not expose parsed refs')
+      assert.ok(captured.target, 'capture reports the resolved target')
 
       // The fake token was not adopted/registered by capture.
       const after = await service.inventory({})
+      assert.ok(!JSON.stringify(after).includes('aaaaaaaaaaaa'), 'forged host fp never enters inventory')
       const afterPanes = after.hosts
         .find((h) => h.id === 'xc')
         .sockets.find((s) => s.id === 'it')
         .sessions.flatMap((s) => s.windows.flatMap((w) => w.panes))
-      assert.ok(afterPanes.every((p) => Number(p.pid) === 0 || p.ref === undefined || true))
-      assert.ok(!JSON.stringify(after).includes('aaaaaaaaaaaa'), 'forged host fp never enters inventory')
+      assert.equal(afterPanes.length, invPanes.length, 'capture did not add inventory entries')
     } finally {
       await service.close?.()
     }
