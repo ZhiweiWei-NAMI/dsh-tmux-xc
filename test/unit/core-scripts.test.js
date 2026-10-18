@@ -97,6 +97,33 @@ test('every builder returns a complete script with begin first and end last', ()
   }
 });
 
+test('every explicit exit emits end immediately before exiting in every builder', () => {
+  const scripts = {
+    inventory: inventoryScript(NONCE, SOCKET),
+    createSession: createSessionScript(NONCE, SOCKET, { name: 'train' }),
+    createWindow: createWindowScript(NONCE, SOCKET, EXPECT, {}),
+    splitPane: splitPaneScript(NONCE, SOCKET, EXPECT, {}),
+    send: sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true }),
+    capture: captureScript(NONCE, SOCKET, EXPECT),
+    detach: detachScript(NONCE, SOCKET, EXPECT),
+    killSession: killScript(NONCE, SOCKET, EXPECT, 'session'),
+    killWindow: killScript(NONCE, SOCKET, EXPECT, 'window'),
+    killPane: killScript(NONCE, SOCKET, EXPECT, 'pane'),
+    guard: guardSnippet(NONCE, SOCKET, EXPECT),
+  };
+  const endCommand = `printf 'XC1${NONCE}\\037end\\036${NONCE}\\036\\n'`;
+  for (const [builder, script] of Object.entries(scripts)) {
+    const exits = [...script.matchAll(/\bexit\b/g)];
+    assert.ok(exits.length > 0, `${builder} has early-exit branches to audit`);
+    for (const { index } of exits) {
+      assert.ok(
+        script.slice(0, index).trimEnd().endsWith(`${endCommand};`),
+        `${builder}: exit at ${index} must immediately follow the end record`,
+      );
+    }
+  }
+});
+
 test('framing round-trips through parseRecords for literal records', () => {
   const script = inventoryScript(NONCE, SOCKET);
   const parsed = parseRecords(literalRecords(script), NONCE);
