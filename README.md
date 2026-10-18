@@ -128,6 +128,7 @@ More: [docs/KNOWN-LIMITATIONS.md](docs/KNOWN-LIMITATIONS.md), [docs/CONTRACTS.md
 | [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md) | 中文 | 任务导向使用指南 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | English | compatibility matrix |
 | [docs/KNOWN-LIMITATIONS.md](docs/KNOWN-LIMITATIONS.md) | English | known limitations |
+| [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | English | test results (unit, real-ssh integration, GUI acceptance with screenshots) |
 | [docs/dsh-tmux-cc-fork.md](docs/dsh-tmux-cc-fork.md) | English | why not a runtime dep; fork note |
 | [docs/PRD.md](docs/PRD.md) / [docs/DESIGN.md](docs/DESIGN.md) / [docs/CONTRACTS.md](docs/CONTRACTS.md) | English | product/design/contract source of truth |
 

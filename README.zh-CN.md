@@ -128,6 +128,7 @@ agent 与浏览器只能从该列表中选择 `hostId`/`socketId`，永远无法
 | [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md) | 中文 | 任务导向使用指南 |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | English | 兼容性矩阵 |
 | [docs/KNOWN-LIMITATIONS.md](docs/KNOWN-LIMITATIONS.md) | English | 已知限制 |
+| [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | English | 测试结果（单元、真实 ssh 集成、GUI 验收与截图） |
 | [docs/dsh-tmux-cc-fork.md](docs/dsh-tmux-cc-fork.md) | English | 为何不做运行时依赖；fork 说明 |
 | [docs/PRD.md](docs/PRD.md) / [docs/DESIGN.md](docs/DESIGN.md) / [docs/CONTRACTS.md](docs/CONTRACTS.md) | English | 产品/设计/契约源头 |
 
