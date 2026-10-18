@@ -34,8 +34,8 @@
     "zod": "^4.0.0"
   },
   "scripts": {
-    "test": "node --test test/unit/",
-    "test:integration": "node --test --test-concurrency=1 test/integration/",
+    "test": "node --test test/unit/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 test/integration/*.test.mjs",
     "pack:release": "npm pack --pack-destination dist"
   }
 }
