@@ -9,7 +9,7 @@ const pure = globalThis.__dshTmuxXcPure;
 
 test('client-pure: pure builders are exported for Node evaluation', () => {
   assert.ok(pure, 'globalThis.__dshTmuxXcPure should be defined');
-  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString', 'findInventoryTarget', 'kindTextFor', 'resourceLabel', 'rowTitle']) {
+  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString', 'findInventoryTarget', 'kindTextFor', 'resourceLabel', 'rowTitle', 'childTaskAliases', 'menuPosition', 'tokenAt', 'canonicalToken']) {
     assert.equal(typeof pure[name], 'function', `${name} should be a function`);
   }
 });
@@ -59,6 +59,84 @@ for (const [locale, words] of Object.entries(displayLocales)) {
     assert.equal(pure.resourceLabel('pane', { index: 0, cmd: 'ba\u202esh\n' }, t), `${words.kindPane} 0 · bash`);
   });
 }
+
+test('rowTitle: repeated parent alias falls back to the indexed resource title, without changing action identity', () => {
+  const pane = { kind: 'pane', alias: 'tmux 插件开发', label: 'Pane 0 · claude', uri: 'exact-pane-uri' };
+  const before = { ...pane };
+  assert.equal(pure.rowTitle(pane, '  tmux 插件开发  '), 'Pane 0 · claude');
+  assert.equal(pure.rowTitle(pane, 'Other task'), 'tmux 插件开发');
+  assert.equal(pure.rowTitle(pane), 'tmux 插件开发');
+  assert.deepEqual(pane, before);
+});
+
+test('childTaskAliases: distinct child tasks remain discoverable in a collapsed session', () => {
+  const session = { alias: 'Main task', windows: [
+    { alias: 'tmux 插件开发', panes: [{ alias: 'tmux 插件开发' }, { alias: ' Logs\n task ' }] },
+    { alias: 'Main task', panes: [{ alias: '' }, { alias: 'Logs task' }, { alias: 'A\u202eudit' }] },
+  ] };
+  const before = structuredClone(session);
+  assert.deepEqual(pure.childTaskAliases(session), ['tmux 插件开发', 'Logs task', 'Audit']);
+  assert.deepEqual(pure.childTaskAliases({ windows: [{ panes: [{}] }] }), []);
+  assert.deepEqual(pure.childTaskAliases({}), []);
+  assert.deepEqual(session, before);
+});
+
+test('menuPosition: flip the bottom host menu above its trigger and clamp the right edge at 1500×950', () => {
+  assert.deepEqual(pure.menuPosition(
+    { left: 1460, top: 905, bottom: 923 }, { width: 180, height: 60 }, { width: 1500, height: 950 },
+  ), { left: 1312, top: 843 });
+  assert.deepEqual(pure.menuPosition(
+    { left: 100, top: 100, bottom: 118 }, { width: 240, height: 160 }, { width: 1500, height: 950 },
+  ), { left: 100, top: 120 });
+  assert.deepEqual(pure.menuPosition(
+    { left: -20, top: 90, bottom: 108 }, { width: 600, height: 400 }, { width: 320, height: 200 },
+  ), { left: 8, top: 8 });
+});
+
+// Verbatim failing stored reference from independent SOL browser-actions line 35.
+// A pure regression is not a substitute for the manager's sent-chip click/reload recheck.
+const storedSolToken = '@[NaMILab ssh loopback · 窗格 sol-agent-owned:0.0 %11](dsh-tmux:v1/lab/dea37f45406a/e2e/3822029-1792321037/pane/7/9/11)';
+
+test('tmux history rule: complete spaced stored token wins the same-start tie with the generic file rule', () => {
+  const rule = pure.tmuxUserTextRule;
+  const text = storedSolToken + '  Navigation test only: acknowledge this reference.';
+  const tmux = rule.match(text, 0);
+  assert.equal(rule.id, 'tmux-xc');
+  assert.ok(rule.order < 30, 'DSH file/folder rules have order 30; lower order wins equal-start ties');
+  assert.deepEqual(tmux, {
+    id: 'tmux-xc', start: 0, end: storedSolToken.length,
+    data: { label: 'NaMILab ssh loopback · 窗格 sol-agent-owned:0.0 %11', uri: 'dsh-tmux:v1/lab/dea37f45406a/e2e/3822029-1792321037/pane/7/9/11' },
+  });
+  // DSH ui-reference nextPath uses this broad whitespace-delimited file grammar.
+  const fileMatch = /(?<!\S)(@"[^"\n]+"|@[^\s]+)/gu.exec(text);
+  assert.equal(fileMatch[0], '@[NaMILab');
+  const file = { id: 'file', start: fileMatch.index, end: fileMatch.index + fileMatch[0].length };
+  // DSH ui-conversation:3908 sorts ascending; :3750 only replaces an earlier start.
+  const winner = [{ order: 30, node: file }, { order: rule.order, node: tmux }]
+    .sort((a, b) => a.order - b.order)
+    .reduce((best, item) => !best || item.node.start < best.start ? item.node : best, undefined);
+  assert.equal(winner.id, 'tmux-xc');
+  assert.equal(rule.match(text, storedSolToken.length), undefined);
+  assert.deepEqual(rule.match(text, 0), tmux, 're-evaluating stored text needs no composer state');
+});
+
+test('tokenAt/canonicalToken: preserve full wire identity, labels and ranges; reject partial/non-tmux tokens', () => {
+  const parsed = pure.canonicalToken(storedSolToken);
+  assert.equal(parsed.uri, 'dsh-tmux:v1/lab/dea37f45406a/e2e/3822029-1792321037/pane/7/9/11');
+  assert.equal(parsed.ref.pid, 11);
+  const text = '@notes.txt before ' + storedSolToken + ' after ' + storedSolToken;
+  const first = pure.tokenAt(text, 0);
+  assert.equal(text.slice(first.start, first.end), storedSolToken);
+  const second = pure.tokenAt(text, first.end);
+  assert.ok(second.start > first.end);
+  assert.equal(text.slice(second.start, second.end), storedSolToken);
+  assert.equal(pure.canonicalToken(storedSolToken, parsed.uri).uri, parsed.uri);
+  for (const token of [undefined, '', storedSolToken.slice(0, -1), 'prefix ' + storedSolToken, storedSolToken + ' suffix', '@[File label](file:///tmp/a)']) {
+    assert.equal(pure.canonicalToken(token), null);
+  }
+  assert.equal(pure.canonicalToken(storedSolToken, parsed.uri.replace('/11', '/12')), null);
+  assert.equal(pure.tokenAt(storedSolToken.replace('ssh loopback', 'ssh\nloopback')), undefined);
+});
 
 test('posixQuote single-quotes and escapes embedded quotes', () => {
   assert.equal(pure.posixQuote('abc'), "'abc'");
