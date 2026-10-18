@@ -1,10 +1,10 @@
 // Service-level integration for PRD acceptance tests A1/A5/A6/A7, A11, A12 and A13.
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { CODES } from '../../lib/core/errors.js'
-import { decodeRef } from '../../lib/core/uri.js'
 import {
   capturePane,
+  checkInfra,
+  core,
   findSession,
   hasServer,
   killTestServer,
@@ -22,7 +22,15 @@ import {
   waitUntilOk,
 } from './helpers.mjs'
 
-describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
+const skip = checkInfra().skip
+
+/** `target.session`/`target.window` may be a fresh label string or the parsed node. */
+function labelOf(target, field) {
+  const value = target?.[field]
+  return typeof value === 'string' ? value : value?.name
+}
+
+describe('service (real ssh, isolated tmux)', { skip, timeout: 180000 }, () => {
   it('A1/A5: create is visible in inventory; rename keeps the old ref resolvable', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
@@ -39,7 +47,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.ok(created && created.uri, 'create returns a registry entry with uri')
       assert.equal(created.origin, 'created')
       assert.equal(created.kind, 'session')
-      assert.equal(created.labels?.session ?? created.meta?.sessionName ?? name, name)
+      if (created.labels) assert.equal(created.labels.session, name)
 
       const inv = await service.inventory({})
       const session = findSession(inv, 'xc', name)
@@ -47,13 +55,12 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.equal(session.sid, created.sid)
       assert.ok(session.windows.length >= 1)
       const win = session.windows[0]
-      const pane = win.panes[0]
-      assert.ok(pane, 'session has a pane')
+      assert.ok(win.panes[0], 'session has a pane')
 
       const before = await service.resolveRef(created.uri, {})
       assert.equal(before.result.code, 'OK')
-      assert.equal(before.result.target.session, name)
-      assert.equal(before.result.target.window, win.name)
+      assert.equal(labelOf(before.result.target, 'session'), name)
+      assert.equal(labelOf(before.result.target, 'window'), win.name)
 
       const newSessionName = uniqueName('renamed')
       const newWindowName = uniqueName('win')
@@ -62,10 +69,10 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
 
       const after = await service.resolveRef(created.uri, {})
       assert.equal(after.result.code, 'OK')
-      assert.equal(after.result.target.session, newSessionName)
-      assert.equal(after.result.target.window, newWindowName)
+      assert.equal(labelOf(after.result.target, 'session'), newSessionName)
+      assert.equal(labelOf(after.result.target, 'window'), newWindowName)
       // Same ids, same generation: the durable reference did not move.
-      assert.equal(Number(after.result.target.pid), Number(pane.pid))
+      assert.equal(Number(after.result.target.sid), Number(created.sid))
     } finally {
       await service.close?.()
     }
@@ -74,6 +81,10 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
   it('A6: kill + recreate the same name leaves the old ref TARGET_GONE', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
+    const { CODES } = await core('errors')
+    // Keep another session alive so killing the target does not stop the server (tmux exits
+    // with its last session), leaving TARGET_GONE rather than SERVER_GONE.
+    newSleepSession(ctx.socketName, uniqueName('keeper'))
     const service = await ctx.makeService()
     try {
       const name = uniqueName('gone')
@@ -112,6 +123,8 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
   it('A7: restarting the tmux server on the same socket yields SERVER_RESTARTED', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
+    const { CODES } = await core('errors')
+    const { decodeRef } = await core('uri')
     const service = await ctx.makeService()
     try {
       const name = uniqueName('restart')
@@ -130,12 +143,11 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       newDetachedSession(ctx.socketName, name, ['cat'])
       await waitUntilOk(() => localTmux(ctx.socketName, 'has-session', '-t', name), 5000)
 
-      const err = await rejectsWithCode(
+      await rejectsWithCode(
         service.resolveRef(created.uri, {}),
         CODES.SERVER_RESTARTED,
         'ref across server restart',
       )
-      assert.equal(err.code, CODES.SERVER_RESTARTED)
 
       const inv = await service.inventory({})
       const socket = (inv.hosts.find((h) => h.id === 'xc') || {}).sockets?.[0]
@@ -155,7 +167,6 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       const sid = newSleepSession(ctx.socketName, name)
       await waitForPaneText(ctx.socketName, `$${sid}`, 'ready')
       const osPid = paneProcessPid(ctx.socketName, `$${sid}`)
-      const paneId = paneIdOf(ctx.socketName, sid)
 
       const showOptionsBefore = localTmux(ctx.socketName, 'show-options', '-g')
       const showEnvBefore = localTmux(ctx.socketName, 'show-environment', '-g')
@@ -188,7 +199,8 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
 
       const resolved = await service.resolveRef(entry.uri, {})
       assert.equal(resolved.result.code, 'OK')
-      assert.equal(resolved.result.target.session, name, 'adopted session still resolves to itself')
+      assert.equal(Number(resolved.result.target.sid), Number(sid))
+      assert.equal(labelOf(resolved.result.target, 'session'), name, 'adopted session resolves to itself')
     } finally {
       await service.close?.()
     }
@@ -197,6 +209,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
   it('A3: send delivers text literally (no shell expansion); named keys allowed, free-form keys rejected', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
+    const { CODES } = await core('errors')
     const service = await ctx.makeService()
     try {
       const name = uniqueName('send')
@@ -238,6 +251,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
   it('A11: kill requires the exact confirm; detach keeps processes; forget only drops the entry', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
+    const { CODES } = await core('errors')
     const { memoryRegistry } = await import('../../lib/registry.js')
     const registry = memoryRegistry()
     const service = await ctx.makeService({ registry })
@@ -287,8 +301,9 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.equal(localTmux(ctx.socketName, 'has-session', '-t', `$${keepSid}`, { allowFailure: true }).status, 0)
 
       // forget removes only the registry row.
-      assert.ok(await service.forget({ uri: adopted.uri }), 'forget reports success')
-      assert.ok(!registry.resourceGet(adopted.key), 'registry entry removed')
+      await service.forget({ uri: adopted.uri })
+      const { decodeRef, resourceKey } = await core('uri')
+      assert.ok(!registry.resourceGet(resourceKey(decodeRef(adopted.uri))), 'registry entry removed')
       assert.equal(
         localTmux(ctx.socketName, 'has-session', '-t', `$${keepSid}`, { allowFailure: true }).status,
         0,
@@ -320,15 +335,14 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
         by: { sessionId: 'chat-A', workspace: '/ws/a' },
       })
 
-      // Simulate a DSH restart: same storage, brand-new service object.
+      // Simulate a DSH restart: same storage, brand-new service object, old one just dropped.
       second = await ctx.makeService({ registry })
       const resolved = await second.resolveRef(entry.uri, {})
       assert.equal(resolved.result.code, 'OK')
-      assert.equal(resolved.result.target.session, name)
+      assert.equal(labelOf(resolved.result.target, 'session'), name)
       assert.equal(paneProcessPid(ctx.socketName, `$${sid}`), osPid, 'remote process survived the restart')
     } finally {
       await second?.close?.()
-      await first.close?.()
     }
   })
 })

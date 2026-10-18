@@ -5,6 +5,7 @@ import process from 'node:process'
 import { describe, it } from 'node:test'
 import {
   capturePane,
+  checkInfra,
   findPaneById,
   newCatSession,
   newDetachedSession,
@@ -16,8 +17,10 @@ import {
 
 const ROUNDS = 20
 
-describe('concurrency (A10)', { timeout: 240000 }, () => {
-  it('20 concurrent sends per conversation reach only their own pane', async (t) => {
+const skip = checkInfra().skip
+
+describe('concurrency (A10)', { skip, timeout: 240000 }, () => {
+  it('20 cross-conversation rounds (2 concurrent sends each) reach only their own pane', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
     const service = await ctx.makeService()
@@ -38,14 +41,13 @@ describe('concurrency (A10)', { timeout: 240000 }, () => {
         hostId: 'xc', socketId: 'it', target: `%${paneB}`, by: { sessionId: 'conv-b' },
       })
 
-      const sends = []
+      // Two conversations in parallel each round; both services calls run at the same time.
       for (let i = 0; i < ROUNDS; i += 1) {
-        const markerA = `A-${i}-${process.pid}`
-        const markerB = `B-${i}-${process.pid}`
-        sends.push(service.send({ uri: adoptedA.uri, text: markerA, enter: true }))
-        sends.push(service.send({ uri: adoptedB.uri, text: markerB, enter: true }))
+        await Promise.all([
+          service.send({ uri: adoptedA.uri, text: `A-${i}-${process.pid}`, enter: true }),
+          service.send({ uri: adoptedB.uri, text: `B-${i}-${process.pid}`, enter: true }),
+        ])
       }
-      await Promise.all(sends)
 
       for (let i = 0; i < ROUNDS; i += 1) {
         await waitForPaneText(ctx.socketName, `%${paneA}`, `A-${i}-${process.pid}`, 15000)

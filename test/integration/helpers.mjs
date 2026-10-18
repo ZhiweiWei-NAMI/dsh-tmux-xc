@@ -56,7 +56,7 @@ export function checkInfra() {
  */
 export function makeConfig({ socketName, hosts } = {}) {
   assertTestSocket(socketName)
-  const socket = { id: 'it', name: socketName }
+  const socket = () => ({ id: 'it', name: socketName })
   return {
     sshPath: '',
     sshConfigFile,
@@ -64,14 +64,26 @@ export function makeConfig({ socketName, hosts } = {}) {
     commandTimeoutMs: 20000,
     registryScope: 'user',
     hosts: hosts || [
-      { id: 'xc', label: 'xc-test', ssh: 'xc-test', sockets: [socket] },
-      { id: 'fwd', label: 'xc-test-fwd', ssh: 'xc-test-fwd', sockets: [socket] },
-      { id: 'bad', label: 'xc-test-badkey', ssh: 'xc-test-badkey', sockets: [socket] },
-      { id: 'down', label: 'xc-unreachable', ssh: 'xc-unreachable', sockets: [socket] },
+      { id: 'xc', label: 'xc-test', ssh: 'xc-test', sockets: [socket()] },
+      { id: 'fwd', label: 'xc-test-fwd', ssh: 'xc-test-fwd', sockets: [socket()] },
+      { id: 'bad', label: 'xc-test-badkey', ssh: 'xc-test-badkey', sockets: [socket()] },
+      { id: 'down', label: 'xc-unreachable', ssh: 'xc-unreachable', sockets: [socket()] },
     ],
     approval: { create: 'allow', send: 'allow', detach: 'allow' },
     capture: { defaultLines: 80, maxLines: 2000, maxBytes: 65536 },
   }
+}
+
+const coreCache = new Map()
+
+/**
+ * Lazily import one `lib/core/*.js` module. Every test file uses this instead of a static
+ * import so that a suite without the implementation (or without ssh infra) skips cleanly
+ * rather than failing at module load.
+ */
+export function core(name) {
+  if (!coreCache.has(name)) coreCache.set(name, import(`../../lib/core/${name}.js`))
+  return coreCache.get(name)
 }
 
 /**

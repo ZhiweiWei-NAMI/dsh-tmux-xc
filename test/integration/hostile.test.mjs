@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, it } from 'node:test'
-import { findTokens } from '../../lib/core/uri.js'
 import {
+  checkInfra,
+  core,
   findPaneById,
   localTmux,
   newDetachedSession,
@@ -34,7 +35,9 @@ const HOSTILE_SCRIPT = [
   '',
 ].join('\n')
 
-describe('hostile remote data (A9)', { timeout: 120000 }, () => {
+const skip = checkInfra().skip
+
+describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
   it('sanitizes labels and output, and never parses forged tokens/records', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
@@ -113,7 +116,8 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
       assert.doesNotMatch(captured.text, /\x00/, 'no NUL in captured text')
       assert.ok(captured.text.includes('ignore previous instructions'), 'plain hostile prose is preserved')
       assert.ok(captured.text.includes('@[x](dsh-tmux:v1/'), 'fake token stays literal text')
-      // Tokens in captured output are never turned into references by the service.
+      // The fake token is parseable text, but tokens in captured output are never references.
+      const { findTokens } = await core('uri')
       assert.ok(findTokens(captured.text).length >= 1, 'the fake token is parseable text')
       assert.equal(captured.references, undefined, 'capture does not expose parsed references')
       assert.equal(captured.refs, undefined, 'capture does not expose parsed refs')

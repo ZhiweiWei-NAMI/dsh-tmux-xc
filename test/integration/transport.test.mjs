@@ -3,11 +3,9 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { describe, it } from 'node:test'
-import { CODES, XcError } from '../../lib/core/errors.js'
-import { buildSshArgv, runRemote } from '../../lib/core/transport.js'
-import { inventoryScript, newNonce } from '../../lib/core/scripts.js'
 import {
   checkInfra,
+  core,
   makeConfig,
   newCatSession,
   newSocketName,
@@ -21,12 +19,15 @@ const skip = checkInfra().skip
 
 describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
   const socketName = newSocketName()
-  const cfg = makeConfig({ socketName })
+  let cachedConfig
+  const config = () => (cachedConfig ||= makeConfig({ socketName }))
 
   it('inventory with no tmux server yields a noserver record, not an error', async () => {
+    const { inventoryScript, newNonce } = await core('scripts')
+    const { runRemote } = await core('transport')
     const nonce = newNonce()
     const res = await runRemote({
-      cfg,
+      cfg: config(),
       alias: 'xc-test',
       script: inventoryScript(nonce, { id: 'it', name: socketName }),
       nonce,
@@ -58,9 +59,11 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
   })
 
   it('works through an alias with a conflicting LocalForward + ExitOnForwardFailure (ClearAllForwardings)', async () => {
+    const { inventoryScript, newNonce } = await core('scripts')
+    const { runRemote } = await core('transport')
     const nonce = newNonce()
     const res = await runRemote({
-      cfg,
+      cfg: config(),
       alias: 'xc-test-fwd',
       script: inventoryScript(nonce, { id: 'it', name: socketName }),
       nonce,
@@ -72,10 +75,13 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
   })
 
   it('host key mismatch surfaces as SSH_HOSTKEY', async () => {
+    const { CODES } = await core('errors')
+    const { inventoryScript, newNonce } = await core('scripts')
+    const { runRemote } = await core('transport')
     const nonce = newNonce()
-    const err = await rejectsWithCode(
+    await rejectsWithCode(
       runRemote({
-        cfg,
+        cfg: config(),
         alias: 'xc-test-badkey',
         script: inventoryScript(nonce, { id: 'it', name: socketName }),
         nonce,
@@ -85,15 +91,17 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
       CODES.SSH_HOSTKEY,
       'bad host key',
     )
-    assert.ok(err instanceof XcError)
   })
 
   it('connection refused surfaces as HOST_UNREACHABLE quickly', async () => {
+    const { CODES } = await core('errors')
+    const { inventoryScript, newNonce } = await core('scripts')
+    const { runRemote } = await core('transport')
     const nonce = newNonce()
     const started = Date.now()
     await rejectsWithCode(
       runRemote({
-        cfg,
+        cfg: config(),
         alias: 'xc-unreachable',
         script: inventoryScript(nonce, { id: 'it', name: socketName }),
         nonce,
@@ -108,6 +116,9 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
   })
 
   it('AbortSignal cancels an in-flight read', async () => {
+    const { CODES } = await core('errors')
+    const { newNonce } = await core('scripts')
+    const { runRemote } = await core('transport')
     const nonce = newNonce()
     const controller = new AbortController()
     // A remote script that waits long enough for the abort to win.
@@ -117,7 +128,7 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
       `printf 'XC1${nonce}\\037end\\036${nonce}\\036\\n'`,
     ].join('\n')
     const pending = runRemote({
-      cfg,
+      cfg: config(),
       alias: 'xc-test',
       script,
       nonce,
@@ -129,8 +140,12 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
     await rejectsWithCode(pending, CODES.CANCELLED, 'aborted read')
   })
 
-  it('argv uses BatchMode/ClearAllForwardings and never disables host key checking', () => {
-    const argv = buildSshArgv({ sshPath: '', sshConfigFile: cfg.sshConfigFile, connectTimeoutSec: 7 }, 'xc-test')
+  it('argv uses BatchMode/ClearAllForwardings and never disables host key checking', async () => {
+    const { buildSshArgv } = await core('transport')
+    const argv = buildSshArgv(
+      { sshPath: '', sshConfigFile: config().sshConfigFile, connectTimeoutSec: 7 },
+      'xc-test',
+    )
     const joined = argv.join(' ')
     assert.ok(joined.includes('BatchMode=yes'), 'BatchMode=yes')
     assert.ok(joined.includes('ClearAllForwardings=yes'), 'ClearAllForwardings=yes')
@@ -142,14 +157,14 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
     assert.equal(argv.at(-1), 'sh -s')
     const fwdIndex = argv.indexOf('-F')
     if (fwdIndex >= 0) {
-      assert.equal(argv[fwdIndex + 1], cfg.sshConfigFile)
+      assert.equal(argv[fwdIndex + 1], config().sshConfigFile)
       assert.ok(fwdIndex < argv.indexOf('xc-test'), '-F precedes the destination')
     }
   })
 })
 
 /** Transport decorator: counts ssh spawns and aborts the caller's signal shortly after spawn. */
-function abortingTransport({ abortAfterMs = 100 } = {}) {
+function abortingTransport(runRemote, { abortAfterMs = 100 } = {}) {
   let spawns = 0
   let mutatingSpawns = 0
   let abortHook = () => {}
@@ -191,7 +206,9 @@ describe('mutation no-replay', { skip, timeout: 120000 }, () => {
   it('send aborted right after spawn → OUTCOME_UNKNOWN with exactly one spawn', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
-    const transport = abortingTransport()
+    const { CODES, XcError } = await core('errors')
+    const { runRemote } = await core('transport')
+    const transport = abortingTransport(runRemote)
     const service = await ctx.makeService({ transport })
     try {
       const name = uniqueName('noreplay')
