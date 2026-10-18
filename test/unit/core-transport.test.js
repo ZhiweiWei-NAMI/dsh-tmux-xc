@@ -553,6 +553,41 @@ test('an err record without a message retains the default remote error message',
   );
 });
 
+test('action diagnostics survive framing and are sanitized and bounded in message/details', async () => {
+  for (const code of [CODES.REMOTE_ERROR, CODES.OUTCOME_UNKNOWN]) {
+    const prefix = code === CODES.OUTCOME_UNKNOWN
+      ? 'tmux action failed; verify with capture before retrying' : 'tmux action failed';
+    const raw = rec(['guarded']) + rec(['progress']) +
+      '\u001b[31musage: bad target\u001b[0m\n\t\u202eevil\u200b ' + '界'.repeat(400);
+    const record = ['err', code, prefix, Buffer.from(raw).toString('hex')];
+    const { spawnImpl, calls } = fakeSpawn([succeed(okOutput([record]))]);
+    await assert.rejects(runRemote({
+      cfg: CFG, alias: ALIAS, script: 'x', nonce: NONCE, mutating: true, spawnImpl,
+    }), (error) => {
+      assert.equal(error.code, code);
+      assert.ok(error.message.startsWith(`${prefix}: usage: bad target evil `));
+      assert.equal(Array.from(error.details.output).length, 300);
+      assert.equal(error.details.output.at(-1), '…');
+      assert.equal(error.details.record[3], error.details.output);
+      assert.equal(/XC1|[\u001b\u001e\u001f\n\t\u202e\u200b]/u.test(error.message), false);
+      assert.equal(error.message.includes('verify with capture'), code === CODES.OUTCOME_UNKNOWN);
+      return true;
+    });
+    assert.equal(calls.length, 1, 'failed mutations are never replayed');
+  }
+});
+
+test('legacy remote errors also sanitize their visible message and record', async () => {
+  const { spawnImpl } = fakeSpawn([succeed(okOutput([
+    ['err', CODES.REMOTE_ERROR, '\u001b[31mbad argument\u001b[0m\n\u202eunsafe'],
+  ]))]);
+  await assert.rejects(runRemote({ cfg: CFG, alias: ALIAS, script: 'x', nonce: NONCE, spawnImpl }), (error) => {
+    assert.equal(error.message, 'bad argument unsafe');
+    assert.deepEqual(error.details.record, ['err', CODES.REMOTE_ERROR, 'bad argument unsafe']);
+    return true;
+  });
+});
+
 test('an unknown err code falls back to REMOTE_ERROR', async () => {
   const { spawnImpl } = fakeSpawn([succeed(okOutput([['err', 'NOPE', 'boom']]))]);
   await expectCode(

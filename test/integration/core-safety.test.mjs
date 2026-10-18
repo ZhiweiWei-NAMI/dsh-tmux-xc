@@ -115,6 +115,31 @@ describe('RV1 core safety (real tmux parser and isolated socket)', { skip, timeo
     assert.equal(capturePane(ctx.socketName, '%0').includes('a'), false)
   })
 
+  it('F4: rejected first actions are REMOTE_ERROR with visible tmux diagnostics', async (t) => {
+    const ctx = suiteContext(t)
+    if (!ctx) return
+    const sid = newCatSession(ctx.socketName, uniqueName('reject'))
+    const target = `%${paneIdOf(ctx.socketName, sid)}`
+    const before = capturePane(ctx.socketName, target)
+    const error = await rejectsWithCode(remote(ctx, 'sendScript', expectation(ctx.socketName, target), {
+      hex: ['61'], enter: true,
+    }, {
+      transform: (script) => script.replace(' -H 61', ' -X no-such-copy-command'),
+    }), 'REMOTE_ERROR')
+    assert.ok(error.message.includes('not in a mode'))
+    assert.ok(error.details.output.includes('not in a mode'))
+    assert.equal(error.message.includes('verify with capture'), false)
+    assert.equal(capturePane(ctx.socketName, target), before, 'neither payload nor Enter ran')
+
+    const invalid = await rejectsWithCode(remote(ctx, 'sendScript', expectation(ctx.socketName, target), {
+      hex: ['61'],
+    }, {
+      transform: (script) => script.replace(' -H 61', ' -Z'),
+    }), 'REMOTE_ERROR')
+    assert.ok(/usage:|unknown flag|invalid option/.test(invalid.message))
+    assert.ok(Array.from(invalid.details.output).length <= 300)
+  })
+
   it('RV1-08: an action failure stops later chunks/Enter and cannot report delivered', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
@@ -122,7 +147,7 @@ describe('RV1 core safety (real tmux parser and isolated socket)', { skip, timeo
       'stty -echo; printf "READY\\n"; IFS= read -r line; printf "SUBMITTED:%s\\n" "$line"; exec sleep 600'])
     const target = `%${paneIdOf(ctx.socketName, sid)}`
     await waitForPaneText(ctx.socketName, target, 'READY')
-    await rejectsWithCode(remote(ctx, 'sendScript', expectation(ctx.socketName, target), {
+    const error = await rejectsWithCode(remote(ctx, 'sendScript', expectation(ctx.socketName, target), {
       hex: [...Array(256).fill('61'), '62'], enter: true,
     }, {
       // Fault injection changes only the second native action. The first chunk
@@ -132,6 +157,9 @@ describe('RV1 core safety (real tmux parser and isolated socket)', { skip, timeo
         return script.replace(' -H 62', ' -X no-such-copy-command')
       },
     }), 'OUTCOME_UNKNOWN')
+    assert.ok(error.message.includes('not in a mode'))
+    assert.ok(error.message.includes('verify with capture before retrying'))
+    assert.equal(error.details.output.includes('XC1'), false)
     assert.equal(capturePane(ctx.socketName, target).includes('SUBMITTED:'), false)
     // A successful separate read confirms the server/target remain available;
     // no reconnect/replay of the failed batch is performed.
