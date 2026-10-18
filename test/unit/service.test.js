@@ -201,14 +201,53 @@ test('mutations run mutating (never retried); reads run read-only', async () => 
 
 test('guard mismatch maps to TARGET_GONE and SERVER_RESTARTED', async () => {
   const transport = makeTransport();
-  transport.state.send = [['mismatch', GEN]];
+  transport.state.send = [['mismatch', GEN, '$3', '@5', '%8', '%7', GEN]];
   const { service } = makeService(transport);
   await assert.rejects(service.send({ uri: ref(), text: 'x' }), (error) => error.code === CODES.TARGET_GONE);
 
   const transport2 = makeTransport();
-  transport2.state.send = [['mismatch', '1111-2222']];
+  transport2.state.send = [['mismatch', '1111-2222', '$3', '@5', '%7', '%7', GEN]];
   const svc2 = makeService(transport2).service;
   await assert.rejects(svc2.send({ uri: ref(), text: 'x' }), (error) => error.code === CODES.SERVER_RESTARTED);
+});
+
+for (const kind of ['session', 'window', 'pane']) {
+  test(`create ${kind} parses transport records and registers the created target`, async () => {
+    const transport = makeTransport();
+    transport.state.created = [['created', GEN, '$3', '@5', '%7', 'train', 'train']];
+    if (kind === 'session') {
+      let inventories = 0;
+      transport.state.inventory = () => ++inventories === 1
+        ? [hostRecord(), ['noserver']]
+        : [hostRecord(), paneRecord()];
+    }
+    const { service, registry } = makeService(transport);
+    const entry = await service.create({
+      hostId: 'namilab',
+      kind,
+      name: kind === 'pane' ? undefined : 'train',
+      parentUri: kind === 'window'
+        ? ref({ kind: 'session', wid: null, pid: null })
+        : kind === 'pane' ? ref() : undefined,
+      by: { sessionId: 'chat-a' },
+    });
+    assert.equal(entry.kind, kind);
+    assert.equal(entry.origin, 'created');
+    assert.equal(entry.gen, GEN);
+    assert.deepEqual(await registry.resourceGet(entry.key), entry);
+    assert.equal(transport.calls.filter((call) => call.mutating).length, 1);
+  });
+}
+
+test('linked window absent from its referenced session refuses send with AMBIGUOUS', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 4 }), paneRecord({ sid: 5 })];
+  const { service } = makeService(transport);
+  const uri = ref({ kind: 'window', pid: null });
+  const { result } = await service.resolveRef(uri);
+  assert.equal(result.code, CODES.AMBIGUOUS);
+  await assert.rejects(service.send({ uri, text: 'x' }), (error) => error.code === CODES.AMBIGUOUS);
+  assert.equal(transport.calls.some((call) => call.mutating), false);
 });
 
 test('host and socket not allow-listed refuse', async () => {

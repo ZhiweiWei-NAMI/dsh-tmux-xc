@@ -163,8 +163,8 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
   })
 })
 
-/** Transport decorator: counts ssh spawns and aborts the caller's signal shortly after spawn. */
-function abortingTransport(runRemote, { abortAfterMs = 100 } = {}) {
+/** Transport decorator: count real SSH spawns and abort just after writing a mutation. */
+function abortingTransport(runRemote) {
   let spawns = 0
   let mutatingSpawns = 0
   let abortHook = () => {}
@@ -182,17 +182,25 @@ function abortingTransport(runRemote, { abortAfterMs = 100 } = {}) {
         if (args.mutating) mutatingSpawns += 1
         const child = spawn(argv[0], argv.slice(1), {
           stdio: ['pipe', 'pipe', 'pipe'],
+          shell: false,
           windowsHide: true,
         })
-        if (args.mutating) setTimeout(() => abortHook(args), abortAfterMs)
+        // A killed SSH child can close its pipe before the buffered write drains.
+        child.stdin.on('error', () => {})
         return {
           stdout: child.stdout,
           stderr: child.stderr,
-          stdinWrite: (str) => child.stdin.write(str),
+          stdinWrite(str) {
+            // sh -s must receive EOF; leaving stdin open makes even adopt hang.
+            child.stdin.end(str)
+            // Abort after stdinWrite returns, with transport listeners installed.
+            // Avoid racing a fixed delay against completion or slow SSH setup.
+            if (args.mutating) queueMicrotask(() => abortHook(args))
+          },
           kill: () => child.kill('SIGKILL'),
-          done: new Promise((resolve) => {
+          done: new Promise((resolve, reject) => {
             child.once('close', (code, signal) => resolve({ code, signal }))
-            child.once('error', () => resolve({ code: null, signal: null }))
+            child.once('error', reject)
           }),
         }
       }
@@ -202,7 +210,7 @@ function abortingTransport(runRemote, { abortAfterMs = 100 } = {}) {
 }
 
 describe('mutation no-replay', { skip, timeout: 120000 }, () => {
-  it('send aborted right after spawn → OUTCOME_UNKNOWN with exactly one spawn', async (t) => {
+  it('send aborted just after script write → OUTCOME_UNKNOWN with exactly one mutating spawn', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
     const { CODES, XcError } = await core('errors')

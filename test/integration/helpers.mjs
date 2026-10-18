@@ -61,7 +61,8 @@ export function makeConfig({ socketName, hosts } = {}) {
     sshPath: '',
     sshConfigFile,
     connectTimeoutSec: 3,
-    commandTimeoutMs: 20000,
+    // Bound each real SSH command separately; scenario budgets include many roundtrips.
+    commandTimeoutMs: 30000,
     registryScope: 'user',
     hosts: hosts || [
       { id: 'xc', label: 'xc-test', ssh: 'xc-test', sockets: [socket()] },

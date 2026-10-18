@@ -530,22 +530,27 @@ test('timeout kills the child; mutating reports OUTCOME_UNKNOWN, read-only TIMEO
   assert.equal(mutating.calls[0].kills, 1);
 });
 
-test('abort before spawn rejects CANCELLED without spawning', async () => {
-  const controller = new AbortController();
-  controller.abort();
-  const { spawnImpl, calls } = fakeSpawn([succeed(okOutput([]))]);
-  await expectCode(
-    runRemote({
-      cfg: CFG,
-      alias: ALIAS,
-      script: 'x',
-      nonce: NONCE,
-      signal: controller.signal,
-      spawnImpl,
-    }),
-    CODES.CANCELLED,
-  );
-  assert.equal(calls.length, 0);
+test('abort before spawn rejects CANCELLED without spawning, including mutations', async () => {
+  for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
+    for (const mutating of [false, true]) {
+      const controller = new AbortController();
+      controller.abort();
+      const { spawnImpl, calls } = fakeSpawn([succeed(okOutput([]))]);
+      await expectCode(
+        runRemote({
+          cfg: CFG,
+          ...options,
+          script: 'x',
+          nonce: NONCE,
+          mutating,
+          signal: controller.signal,
+          spawnImpl,
+        }),
+        CODES.CANCELLED,
+      );
+      assert.equal(calls.length, 0);
+    }
+  }
 });
 
 test('abort after write is CANCELLED for read-only and OUTCOME_UNKNOWN for mutating', async () => {
@@ -594,43 +599,71 @@ test('abort after write is CANCELLED for read-only and OUTCOME_UNKNOWN for mutat
   );
 });
 
-test('abort before the stdin write is CANCELLED even for a mutation', async () => {
-  const controller = new AbortController();
-  let child = null;
-  const spawnImpl = (argv) => {
-    // Abort synchronously during spawn: the transport must check the flag
-    // again before writing and must not classify this as an unknown mutation.
-    controller.abort();
-    const out = new PassThrough();
-    const err = new PassThrough();
-    out.end();
-    err.end();
-    child = {
-      argv,
-      stdout: out,
-      stderr: err,
-      writes: [],
-      stdinWrite(text) {
-        child.writes.push(text);
-      },
-      kill() {},
-      done: Promise.resolve({ code: null, signal: 'SIGTERM' }),
-    };
-    return child;
-  };
-  await expectCode(
-    runRemote({
-      cfg: CFG,
-      alias: ALIAS,
-      script: 'x',
-      nonce: NONCE,
-      mutating: true,
-      signal: controller.signal,
-      spawnImpl,
-    }),
-    CODES.CANCELLED,
-  );
-  assert.deepEqual(child.writes, []);
+test('synchronous spawn abort is OUTCOME_UNKNOWN for mutations, without writing or replaying', async () => {
+  for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
+    for (const mutating of [false, true]) {
+      const controller = new AbortController();
+      const fake = fakeSpawn([{
+        onKill: (child) => child.finish({ code: null, signal: 'SIGTERM' }),
+      }]);
+      const spawnImpl = (argv, spawnOptions) => {
+        const child = fake.spawnImpl(argv, spawnOptions);
+        // Abort before runRemote installs its listener or writes stdin.
+        controller.abort();
+        return child;
+      };
+      await assert.rejects(runRemote({
+        cfg: CFG,
+        ...options,
+        script: 'tmux send-keys -t %7 Enter\n',
+        nonce: NONCE,
+        mutating,
+        signal: controller.signal,
+        spawnImpl,
+      }), (error) => {
+        assert.ok(error instanceof XcError);
+        assert.equal(error.code, mutating ? CODES.OUTCOME_UNKNOWN : CODES.CANCELLED);
+        assert.equal(error.details.reason, 'aborted');
+        if (mutating) assert.match(error.message, /verify with capture before retrying/);
+        return true;
+      });
+      assert.equal(fake.calls.length, 1);
+      assert.deepEqual(fake.calls[0].writes, []);
+      assert.equal(fake.calls[0].kills, 1);
+    }
+  }
+});
+
+test('synchronous stdin write abort never replays, even if the write then throws', async () => {
+  for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
+    for (const mutating of [false, true]) {
+      for (const throwAfterAbort of [false, true]) {
+        const controller = new AbortController();
+        const { spawnImpl, calls } = fakeSpawn([{
+          onWrite: () => {
+            controller.abort();
+            if (throwAfterAbort) {
+              throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+            }
+          },
+          onKill: (child) => child.finish({ code: null, signal: 'SIGTERM' }),
+        }]);
+        const script = 'tmux send-keys -t %7 Enter\n';
+        await expectCode(runRemote({
+          cfg: CFG,
+          ...options,
+          script,
+          nonce: NONCE,
+          mutating,
+          signal: controller.signal,
+          spawnImpl,
+        }), mutating ? CODES.OUTCOME_UNKNOWN : CODES.CANCELLED);
+        assert.equal(calls.length, 1);
+        assert.deepEqual(calls[0].writes, [script]);
+        assert.ok(calls[0].kills >= 1);
+      }
+    }
+  }
 });
 
 test('a stdin write failure is HOST_UNREACHABLE read-only, OUTCOME_UNKNOWN mutating', async () => {
