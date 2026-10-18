@@ -49,7 +49,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 180000 }, () => {
       assert.equal(created.kind, 'session')
       if (created.labels) assert.equal(created.labels.session, name)
 
-      const inv = await service.inventory({})
+      const inv = await service.inventory({ hostId: 'xc' })
       const session = findSession(inv, 'xc', name)
       assert.ok(session, 'created session appears in inventory')
       assert.equal(session.sid, created.sid)
@@ -111,7 +111,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 180000 }, () => {
         'old ref after name reuse',
       )
 
-      const inv = await service.inventory({})
+      const inv = await service.inventory({ hostId: 'xc' })
       const fresh = findSession(inv, 'xc', name)
       assert.ok(fresh, 'new same-named session exists')
       assert.notEqual(fresh.sid, oldSid, 'recreated session has a new id')
@@ -149,7 +149,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 180000 }, () => {
         'ref across server restart',
       )
 
-      const inv = await service.inventory({})
+      const inv = await service.inventory({ hostId: 'xc' })
       const socket = (inv.hosts.find((h) => h.id === 'xc') || {}).sockets?.[0]
       assert.ok(socket && socket.server, 'inventory sees the new server')
       assert.notEqual(String(socket.server.gen), String(genBefore))
@@ -309,7 +309,7 @@ describe('service (real ssh, isolated tmux)', { skip, timeout: 180000 }, () => {
         0,
         'tmux object still exists after forget',
       )
-      const inv = await service.inventory({})
+      const inv = await service.inventory({ hostId: 'xc' })
       assert.ok(findSession(inv, 'xc', keep), 'inventory still lists the forgotten tmux session')
     } finally {
       await service.close?.()

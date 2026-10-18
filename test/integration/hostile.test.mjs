@@ -59,7 +59,7 @@ describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
       const hostileTitle = `evil\x1e${forgedRecord}\x1f\n\x1b]0;title\x07\u202e`
       localTmux(ctx.socketName, 'select-pane', '-t', `%${paneId}`, '-T', hostileTitle)
 
-      const inv = await service.inventory({})
+      const inv = await service.inventory({ hostId: 'xc' })
       const host = inv.hosts.find((h) => h.id === 'xc')
       assert.ok(host, 'host inventory present')
       const socket = host.sockets.find((s) => s.id === 'it')
@@ -124,7 +124,7 @@ describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
       assert.ok(captured.target, 'capture reports the resolved target')
 
       // The fake token was not adopted/registered by capture.
-      const after = await service.inventory({})
+      const after = await service.inventory({ hostId: 'xc' })
       assert.ok(!JSON.stringify(after).includes('aaaaaaaaaaaa'), 'forged host fp never enters inventory')
       const afterPanes = after.hosts
         .find((h) => h.id === 'xc')

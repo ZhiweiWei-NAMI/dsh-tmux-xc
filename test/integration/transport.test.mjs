@@ -177,13 +177,12 @@ function abortingTransport(runRemote, { abortAfterMs = 100 } = {}) {
       abortHook = fn
     },
     async runRemote(args) {
-      const spawnImpl = (argv, opts = {}) => {
+      const spawnImpl = (argv) => {
         spawns += 1
         if (args.mutating) mutatingSpawns += 1
         const child = spawn(argv[0], argv.slice(1), {
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
-          ...opts,
         })
         if (args.mutating) setTimeout(() => abortHook(args), abortAfterMs)
         return {
