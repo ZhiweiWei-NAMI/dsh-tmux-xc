@@ -184,6 +184,7 @@ test('findInventoryTarget: selects exact full URIs for session/window/pane, not 
     assertInventoryTarget(pure.findInventoryTarget(fresh.inventory, fresh[kind].uri), fresh, kind);
   }
   assertInventoryTarget(pure.findInventoryTarget(fresh.inventory.hosts, fresh.pane.uri), fresh, 'pane');
+  assertInventoryTarget(pure.findInventoryTarget(fresh.inventory, fresh.pane.uri, true), fresh, 'pane');
 });
 
 test('findInventoryTarget: ancestry changes require explicit relocation', () => {
