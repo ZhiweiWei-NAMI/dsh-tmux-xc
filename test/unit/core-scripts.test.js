@@ -108,10 +108,19 @@ test('inventory framing, fields, missing-server classification and UTF-8 invocat
   assert.ok(inventoryScript(NONCE, { path: '/tmp/socket' }).includes("tmux -u -S '/tmp/socket'"));
 });
 
-test('RV1-04: guard and ALL actions share one synchronous bound tmux client', () => {
+test('RV1-04: every invocation binds its guard and actions to one synchronous tmux client', () => {
   for (const raw of builders().slice(4)) {
     const script = readable(raw);
-    assert.equal([...raw.matchAll(/tmux -u /g)].length, 1);
+    // Detach enumerates once, then guards each per-client mutation separately.
+    const invocations = raw.split('\n').filter((line) => line.includes('tmux -u '));
+    assert.equal(invocations.length, raw.includes('list-clients') ? 2 : 1);
+    for (const invocation of invocations) {
+      const queue = readable(invocation);
+      assert.ok(queue.includes(`#{==:#{pid}-#{start_time},${GEN}}`));
+      for (const check of ['#{session_id},$3', '#{window_id},@5', '#{pane_id},%7']) {
+        assert.ok(queue.includes(check));
+      }
+    }
     assert.ok(script.includes('if-shell -F'));
     assert.ok(script.includes(`#{==:#{pid}-#{start_time},${GEN}}`));
     assert.ok(script.includes('#{==:#{session_id},$3}'));
@@ -152,16 +161,14 @@ test('RV1-02: send atomically refuses synchronization, copy mode, dead and input
   assert.equal(script.includes('set-option'), false);
 });
 
-test('RV1-08: success marker follows all queued actions and failure stops at checked status', () => {
-  for (const builder of [sendScript, detachScript]) {
-    const script = readable(builder(NONCE, SOCKET, EXPECT));
-    assert.ok(script.includes(' ; display-message -p'));
-    assert.ok(script.includes(`XC1${NONCE}\x1fguarded`));
-    assert.ok(script.includes(`XC1${NONCE}\x1fok`));
-    assert.ok(script.includes('OUTCOME_UNKNOWN'));
-    assert.ok(script.includes('verify with capture before retrying'));
-    assert.ok(script.indexOf('if [ "$rc" -ne 0 ]') < script.indexOf('printf \'%s\\n\' "$out"'));
-  }
+test('RV1-08: send success marker follows all queued actions and failure stops at checked status', () => {
+  const script = readable(sendScript(NONCE, SOCKET, EXPECT));
+  assert.ok(script.includes(' ; display-message -p'));
+  assert.ok(script.includes(`XC1${NONCE}\x1fguarded`));
+  assert.ok(script.includes(`XC1${NONCE}\x1fok`));
+  assert.ok(script.includes('OUTCOME_UNKNOWN'));
+  assert.ok(script.includes('verify with capture before retrying'));
+  assert.ok(script.indexOf('if [ "$rc" -ne 0 ]') < script.indexOf('printf \'%s\\n\' "$out"'));
 });
 
 test('create uses dimensions, argv and format-safe cwd in all creation paths', () => {
@@ -262,7 +269,10 @@ test('RV1-15: capture bounds newest raw bytes before hex, emits truncation, chec
 test('detach checks original pane ancestry but acts on its approved session; kill targets exact ids', () => {
   const detach = readable(detachScript(NONCE, SOCKET, EXPECT));
   assert.ok(detach.includes('if-shell -F -t "%7"'));
-  assert.ok(detach.includes('detach-client -s "$3"'));
+  assert.ok(detach.includes('list-clients -t "$3" -F'));
+  assert.ok(detach.includes('#{client_name}'));
+  assert.ok(detach.includes('detach-client -t'));
+  assert.equal(detach.includes('detach-client -s'), false);
   for (const [kind, target] of [['pane', '%7'], ['window', '@5'], ['session', '$3']]) {
     const raw = killScript(NONCE, SOCKET, EXPECT, kind);
     const script = readable(raw);
@@ -274,6 +284,47 @@ test('detach checks original pane ancestry but acts on its approved session; kil
     assert.ok(raw.indexOf('if [ "$rc" -ne 0 ]') < raw.indexOf(`\\037ok`));
   }
   assertInvalid(() => killScript(NONCE, SOCKET, EXPECT, 'client'));
+});
+
+test('F5: detach frames untrusted client names and quotes both nested tmux parser levels', () => {
+  const raw = detachScript(NONCE, SOCKET, EXPECT);
+  const queues = raw.split('\n').filter((line) => line.startsWith('out=$(tmux -u '));
+  assert.equal(queues.length, 2, 'one read-only enumeration and one per-client guarded detach template');
+  assert.ok(queues[0].includes('list-clients'));
+  assert.equal(queues[0].includes('detach-client'), false);
+  assert.ok(queues[1].includes('detach-client -t'));
+  assert.ok(raw.includes(`XC1${NONCE}\x1fclient\x1f${NONCE}\x1f#{client_name}\x1e${NONCE}\x1e`));
+  for (const text of [
+    'client=${clients%%"$client_end"*}', 'clients=${clients#*"$client_end"}',
+    '"$newline$client_start"*"$client_end"*',
+    String.raw`s/[\\"$]/\\&/g; s/[\\"$]/\\&/g`,
+    String.raw`\"'"$client_quoted"'\"`,
+    'printf \'%s_\' "$client"', 'client_quoted=${client_quoted%_}',
+  ]) assert.ok(raw.includes(text), text);
+  assert.equal(raw.includes('eval'), false);
+  assert.equal(raw.includes('for client in'), false);
+  assert.equal(raw.includes('read -r client'), false, 'client names are not newline-delimited shell words');
+  const socketMarker = `XC_DETACH_CLIENT_${NONCE}`;
+  const collision = detachScript(NONCE, { name: socketMarker }, EXPECT);
+  assert.equal([...collision.matchAll(new RegExp(`tmux -u -L '${socketMarker}'`, 'g'))].length, 2,
+    'runtime client expansion cannot replace matching text in the socket selector');
+});
+
+test('F5: detach counts confirmed clients, treats an empty list as zero, and stops on refusal or error', () => {
+  const raw = detachScript(NONCE, SOCKET, EXPECT);
+  assert.ok(raw.includes('detached=0\nwhile [ -n "$clients" ]; do'));
+  assert.ok(raw.includes('detached=$((detached + 1))'));
+  assert.ok(raw.includes(`XC1${NONCE}\x1fprogress\x1e${NONCE}\x1e`));
+  assert.ok(raw.includes('if [ "$detached" -gt 0 ]; then code=OUTCOME_UNKNOWN; fi'));
+  const terminal = raw.lastIndexOf(`printf 'XC1${NONCE}\\037ok`);
+  assert.ok(terminal > raw.lastIndexOf('\ndone\n'));
+  assert.ok(raw.slice(terminal).includes("'$3' 'detached' \"$detached\""));
+  const listRefusal = raw.indexOf('case "$out" in', raw.indexOf('printf \'%s\\n\' "$out"'));
+  assert.ok(listRefusal > 0 && listRefusal < raw.indexOf('clients=${out#'));
+  const mutationCheck = raw.lastIndexOf('if [ "$rc" -ne 0 ]');
+  const count = raw.indexOf('detached=$((detached + 1))');
+  assert.ok(mutationCheck < count && count < terminal);
+  assert.ok(raw.slice(mutationCheck, terminal).includes('exit 0'));
 });
 
 test('hostile configured command argv remains quoted, not raw shell code', () => {

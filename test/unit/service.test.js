@@ -86,6 +86,7 @@ function makeTransport(expectedHost = {
   const state = {
     inventory: () => [hostRecord(), paneRecord()],
     send: [],
+    detach: [['ok', '$3', 'detached', '0']],
     created: [],
   };
   return {
@@ -105,7 +106,7 @@ function makeTransport(expectedHost = {
         };
       }
       if (script.includes('send-keys')) return { records: state.send, stderr: '', exitCode: 0 };
-      if (script.includes('detach-client')) return { records: [], stderr: '', exitCode: 0 };
+      if (script.includes('detach-client')) return { records: state.detach, stderr: '', exitCode: 0 };
       if (script.includes('kill-pane') || script.includes('kill-window') || script.includes('kill-session')) {
         return { records: [], stderr: '', exitCode: 0 };
       }
@@ -524,6 +525,7 @@ test('F4: service supplies valid zero-id guard targets for sole and multi-pane p
       transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 0, wid: 0, pid: 0 }),
         ...(multi ? [paneRecord({ sid: 0, wid: 0, pid: 1, pindex: 1 })] : [])];
       transport.state.created = [['created', GEN, '$0', '@0', '%0', 'train', 'train']];
+      transport.state.detach = [['ok', '$0', 'detached', '0']];
       const { service } = makeService(transport);
       const uri = ref({ kind, sid: 0, wid: kind === 'session' ? null : 0, pid: kind === 'pane' ? 0 : null });
       const target = { session: '$0', window: '@0', pane: '%0' }[kind];
@@ -541,6 +543,48 @@ test('F4: service supplies valid zero-id guard targets for sole and multi-pane p
         assert.equal(/undefined|null|NaN/.test(queue), false);
       }
     }
+  }
+});
+
+for (const count of [0, 1, 3]) {
+  test(`F5: detach reports ${count} confirmed client detaches without retrying`, async () => {
+    const transport = makeTransport();
+    transport.state.detach = [['guarded'], ...Array.from({ length: count }, () => ['progress']),
+      ['ok', '$3', 'detached', String(count)]];
+    const { service } = makeService(transport);
+    assert.deepEqual(await service.detach({ uri: ref() }), {
+      detached: count, target: 'NaMILab · train:0.0 %7',
+    });
+    const mutations = transport.calls.filter((call) => call.mutating);
+    assert.equal(mutations.length, 1);
+    assert.ok(mutations[0].script.includes('list-clients'));
+    assert.ok(mutations[0].script.includes('detach-client -t'));
+    assert.equal(mutations[0].script.includes('detach-client -s'), false);
+  });
+}
+
+for (const records of [
+  [], [['guarded'], ['progress']], [['ok', '$3']],
+  [['ok', '$4', 'detached', '1']], [['ok', '$3', 'detached', '-1']],
+  [['ok', '$3', 'detached', '1.5']], [['ok', '$3', 'detached', '01']],
+  [['ok', '$3', 'detached', '9007199254740992']], [['ok', '$3', 'detached']],
+]) {
+  test(`F5: detach rejects missing or invalid count ${JSON.stringify(records)}`, async () => {
+    const transport = makeTransport();
+    transport.state.detach = records;
+    const { service } = makeService(transport);
+    await assert.rejects(service.detach({ uri: ref() }), (error) => error.code === CODES.PROTOCOL);
+    assert.equal(transport.calls.filter((call) => call.mutating).length, 1);
+  });
+}
+
+test('F5: detach propagates generation/identity refusals without reporting success or replaying', async () => {
+  for (const code of [CODES.SERVER_RESTARTED, CODES.TARGET_CHANGED, CODES.OUTCOME_UNKNOWN]) {
+    const transport = makeTransport();
+    transport.state.scriptError = new XcError(code, 'detach refused or incomplete');
+    const { service } = makeService(transport);
+    await assert.rejects(service.detach({ uri: ref() }), (error) => error.code === code);
+    assert.equal(transport.calls.filter((call) => call.mutating).length, 1);
   }
 });
 
