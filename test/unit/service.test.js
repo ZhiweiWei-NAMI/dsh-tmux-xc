@@ -4,11 +4,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TmuxXcService } from '../lib/service.js';
-import { memoryRegistry } from '../lib/registry.js';
-import { hostFingerprint } from '../lib/core/parse.js';
-import { encodeRef } from '../lib/core/uri.js';
-import { CODES } from '../lib/core/errors.js';
+import { TmuxXcService } from '../../lib/service.js';
+import { memoryRegistry } from '../../lib/registry.js';
+import { hostFingerprint } from '../../lib/core/parse.js';
+import { encodeRef } from '../../lib/core/uri.js';
+import { CODES } from '../../lib/core/errors.js';
 
 const CFG = {
   hosts: [{ id: 'namilab', label: 'NaMILab', ssh: 'NaMILab', sockets: [{ id: 'default' }] }],

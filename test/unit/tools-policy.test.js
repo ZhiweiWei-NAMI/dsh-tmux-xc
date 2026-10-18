@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { registerTools } from '../lib/tools.js';
+import { registerTools } from '../../lib/tools.js';
 
 const ALL_TOOLS = [
   'tmux_xc_list',
