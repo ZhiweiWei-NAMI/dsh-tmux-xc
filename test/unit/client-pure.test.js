@@ -9,7 +9,7 @@ const pure = globalThis.__dshTmuxXcPure;
 
 test('client-pure: pure builders are exported for Node evaluation', () => {
   assert.ok(pure, 'globalThis.__dshTmuxXcPure should be defined');
-  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString']) {
+  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString', 'findInventoryTarget']) {
     assert.equal(typeof pure[name], 'function', `${name} should be a function`);
   }
 });
@@ -106,4 +106,165 @@ test('killConfirmString: rejects invalid ids / kinds / missing fields', () => {
   assert.equal(pure.killConfirmString({ kind: 'window', hostId: 'lab', socketId: 'default', sid: 3 }), null); // no wid
   assert.equal(pure.killConfirmString({ kind: 'pane', hostId: 'lab', socketId: 'default', sid: 1, wid: 2 }), null); // no pid
   assert.equal(pure.killConfirmString({ kind: 'server', hostId: 'lab', socketId: 'default' }), null);
+});
+
+const targetKinds = [
+  ['session', 'sid', '$'],
+  ['window', 'wid', '@'],
+  ['pane', 'pid', '%'],
+];
+
+test('killConfirmString: zero is a valid stable id for every target kind', () => {
+  for (const [kind, , prefix] of targetKinds) {
+    assert.equal(
+      pure.killConfirmString({ kind, hostId: 'lab', socketId: 'xc', sid: 0, wid: 0, pid: 0 }),
+      `lab:xc:${prefix}0`,
+    );
+  }
+});
+
+test('killConfirmString: rejects nonnumeric, negative, fractional and unsafe stable ids', () => {
+  const invalidIds = [undefined, null, '', '0', '7', false, -1, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1];
+  for (const [kind, id] of targetKinds) {
+    for (const value of invalidIds) {
+      const node = { kind, hostId: 'lab', socketId: 'xc', sid: 1, wid: 2, pid: 7, [id]: value };
+      assert.equal(pure.killConfirmString(node), null, `${kind} must reject ${String(value)}`);
+    }
+  }
+});
+
+test('killConfirmString: aliases and names never replace host/socket identity', () => {
+  for (const [kind, , prefix] of targetKinds) {
+    const node = {
+      kind, hostId: 'lab', socketId: 'xc', sid: 7, wid: 7, pid: 7,
+      alias: 'renamed-host', name: 'renamed-target', ssh: 'other-host',
+      hostName: 'display-host', socketName: 'display-socket',
+    };
+    assert.equal(pure.killConfirmString(node), `lab:xc:${prefix}7`);
+    for (const field of ['hostId', 'socketId']) {
+      for (const value of [undefined, null, '', 0]) {
+        assert.equal(pure.killConfirmString({ ...node, [field]: value }), null);
+      }
+    }
+  }
+  for (const kind of [undefined, '', 'host', 'server', 'unknown']) {
+    assert.equal(pure.killConfirmString({ kind, hostId: 'lab', socketId: 'xc', sid: 0, wid: 0, pid: 0 }), null);
+  }
+});
+
+function inventoryUri(kind, sid, wid = '-', pid = '-', identity = {}) {
+  const { hostId = 'lab', hostFp = '012345abcdef', socketId = 'xc', gen = '123-456' } = identity;
+  return `dsh-tmux:v1/${hostId}/${hostFp}/${socketId}/${gen}/${kind}/${sid}/${wid}/${pid}`;
+}
+
+function inventoryFixture({ sid = 1, wid = 2, pid = 7, ...identity } = {}) {
+  const pane = { kind: 'pane', sid, wid, pid, uri: inventoryUri('pane', sid, wid, pid, identity), name: 'fresh pane' };
+  const window = { kind: 'window', sid, wid, uri: inventoryUri('window', sid, wid, '-', identity), panes: [pane] };
+  const session = { kind: 'session', sid, uri: inventoryUri('session', sid, '-', '-', identity), windows: [window] };
+  const socket = { id: identity.socketId || 'xc', gen: identity.gen || '123-456', sessions: [session] };
+  const host = { id: identity.hostId || 'lab', fp: identity.hostFp || '012345abcdef', sockets: [socket] };
+  return { inventory: { hosts: [host] }, host, socket, session, window, pane };
+}
+
+function assertInventoryTarget(actual, fixture, kind) {
+  const keys = ['host', 'socket', 'session'];
+  if (kind !== 'session') keys.push('window');
+  if (kind === 'pane') keys.push('pane');
+  assert.ok(actual, `${kind} target should be found`);
+  assert.deepEqual(Object.keys(actual).sort(), [...keys, 'node'].sort());
+  for (const key of keys) assert.equal(actual[key], fixture[key], `${key} must be the current inventory object`);
+  assert.equal(actual.node, fixture[kind], 'node must be the fresh inventory object, not a decoded or cached ref');
+}
+
+test('findInventoryTarget: selects exact full URIs for session/window/pane, not same-id decoys', () => {
+  const fresh = inventoryFixture();
+  const decoy = inventoryFixture({ sid: 9, wid: 8 });
+  fresh.inventory.hosts.unshift(decoy.host);
+  for (const [kind] of targetKinds) {
+    assertInventoryTarget(pure.findInventoryTarget(fresh.inventory, fresh[kind].uri), fresh, kind);
+  }
+  assertInventoryTarget(pure.findInventoryTarget(fresh.inventory.hosts, fresh.pane.uri), fresh, 'pane');
+  assertInventoryTarget(pure.findInventoryTarget(fresh.inventory, fresh.pane.uri, true), fresh, 'pane');
+});
+
+test('findInventoryTarget: ancestry changes require explicit relocation', () => {
+  const fresh = inventoryFixture({ sid: 11, wid: 12 });
+  assert.equal(pure.findInventoryTarget(fresh.inventory, inventoryUri('pane', 1, 2, 7)), null);
+  assert.equal(pure.findInventoryTarget(fresh.inventory, inventoryUri('pane', 1, 2, 7), false), null);
+  assert.equal(pure.findInventoryTarget(fresh.inventory, inventoryUri('window', 1, 12)), null);
+});
+
+test('findInventoryTarget: relocated pane returns its fresh URI and current session/window ancestry', () => {
+  const oldUri = inventoryUri('pane', 1, 2, 7);
+  const fresh = inventoryFixture({ sid: 11, wid: 12 });
+  const result = pure.findInventoryTarget(fresh.inventory, oldUri, true);
+  assertInventoryTarget(result, fresh, 'pane');
+  assert.equal(result.node.uri, inventoryUri('pane', 11, 12, 7));
+  assert.notEqual(result.node.uri, oldUri);
+});
+
+test('findInventoryTarget: relocated window returns its fresh URI and current session ancestry', () => {
+  const oldUri = inventoryUri('window', 1, 2);
+  const fresh = inventoryFixture({ sid: 11 });
+  const result = pure.findInventoryTarget(fresh.inventory, oldUri, true);
+  assertInventoryTarget(result, fresh, 'window');
+  assert.equal(result.node.uri, inventoryUri('window', 11, 2));
+  assert.notEqual(result.node.uri, oldUri);
+});
+
+test('findInventoryTarget: missing stable targets never fall back to neighboring nodes', () => {
+  const fresh = inventoryFixture();
+  for (const uri of [inventoryUri('session', 99), inventoryUri('window', 1, 99), inventoryUri('pane', 1, 2, 99)]) {
+    for (const relocated of [false, true]) {
+      assert.equal(pure.findInventoryTarget(fresh.inventory, uri, relocated), null);
+    }
+  }
+});
+
+test('findInventoryTarget: replacement generation/fingerprint or different host/socket never relocates', () => {
+  const original = inventoryFixture();
+  for (const identity of [
+    { gen: '123-999' },
+    { hostFp: 'fedcba543210' },
+    { hostId: 'other-lab' },
+    { socketId: 'other-socket' },
+  ]) {
+    const replacement = inventoryFixture(identity);
+    for (const [kind] of targetKinds) {
+      for (const relocated of [false, true]) {
+        assert.equal(pure.findInventoryTarget(replacement.inventory, original[kind].uri, relocated), null);
+      }
+    }
+  }
+});
+
+test('findInventoryTarget: matching numeric ids from a different kind never match', () => {
+  const fresh = inventoryFixture({ sid: 1, wid: 2, pid: 7 });
+  for (const uri of [inventoryUri('session', 7), inventoryUri('window', 1, 7), inventoryUri('pane', 1, 2, 2)]) {
+    assert.equal(pure.findInventoryTarget(fresh.inventory, uri, true), null);
+  }
+});
+
+test('findInventoryTarget: malformed references and absent inventories safely return null', () => {
+  const fresh = inventoryFixture();
+  const malformed = [
+    undefined, null, {}, 7, '', 'not-a-uri', 'dsh-tmux:v1/lab',
+    'dsh-tmux:v2/lab/012345abcdef/xc/123-456/pane/1/2/7',
+    'dsh-tmux:v1/lab/012345abcdef/xc//pane/1/2/7',
+    inventoryUri('pane', 1, 2, '-'),
+    inventoryUri('pane', 1, 2, -1),
+    inventoryUri('pane', 1, 2, 0.5),
+    inventoryUri('pane', 1, 2, Number.MAX_SAFE_INTEGER + 1),
+    inventoryUri('unknown', 1, 2, 7),
+    inventoryUri('server', '-', '-', '-'),
+    `${fresh.pane.uri}/extra`,
+  ];
+  for (const uri of malformed) {
+    for (const relocated of [false, true]) {
+      assert.equal(pure.findInventoryTarget(fresh.inventory, uri, relocated), null, `must reject ${String(uri)}`);
+    }
+  }
+  for (const inventory of [undefined, null, [], {}, { hosts: [] }]) {
+    assert.equal(pure.findInventoryTarget(inventory, fresh.pane.uri, true), null);
+  }
 });
