@@ -116,6 +116,55 @@ test('a non-allow decision from next() is preserved', async () => {
   assert.equal(deny.reason, 'blocked earlier');
 });
 
+test('list rendering distinguishes transport failures from remote/protocol errors and shows codes', () => {
+  const { ctx, registered } = fakeCtx();
+  registerTools(ctx, fakeService(), {});
+  const list = registered.find((definition) => definition.name === 'tmux_xc_list');
+  for (const [status, code] of [
+    ['unreachable', 'SSH_AUTH'],
+    ['unreachable', 'SSH_MISSING'],
+    ['error', 'REMOTE_TOOL_MISSING'],
+    ['error', 'REMOTE_ERROR'],
+    ['error', 'PROTOCOL'],
+  ]) {
+    const blocks = list.output.render({}, { hosts: [{
+      id: 'local', label: 'This host', reachable: false, status, sockets: [],
+      error: { code, message: 'failure detail' },
+    }] });
+    const text = blocks.map((block) => block.text).join('\n');
+    assert.ok(text.includes(`: ${status} — ${code}: failure detail`), text);
+    if (status === 'error') assert.ok(!text.includes('unreachable'), text);
+  }
+});
+
+test('workspace attribution obtains a late workingDirectory service per call', async () => {
+  const { ctx, registered } = fakeCtx();
+  const attributions = [];
+  registerTools(ctx, {
+    ...fakeService(),
+    async adopt({ by }) { attributions.push(by); return {}; },
+  }, {});
+  const adopt = registered.find((definition) => definition.name === 'tmux_xc_adopt');
+  const signal = new AbortController().signal;
+  const agent = { session: { id: 'chat' } };
+  const args = { hostId: 'local', target: '%7' };
+  await adopt.execute(args, { agent, signal });
+  const workingDirectory = { async ensure(owner, callerSignal) {
+    assert.equal(owner, agent);
+    assert.equal(callerSignal, signal);
+    return '/late-workspace';
+  } };
+  ctx.get = (name) => name === 'workingDirectory' ? workingDirectory : undefined;
+  await adopt.execute(args, { agent, signal });
+  ctx.get = () => undefined;
+  await adopt.execute(args, { agent, signal });
+  assert.deepEqual(attributions, [
+    { sessionId: 'chat', workspace: undefined },
+    { sessionId: 'chat', workspace: '/late-workspace' },
+    { sessionId: 'chat', workspace: undefined },
+  ]);
+});
+
 test('capture output is fenced as untrusted', () => {
   const { ctx, registered } = fakeCtx();
   registerTools(ctx, fakeService(), { approval: { create: 'ask', send: 'ask', detach: 'ask' } });
