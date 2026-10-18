@@ -252,12 +252,13 @@ test('refFromInventory builds refs for every kind and throws NOT_FOUND', () => {
   assert.throws(() => refFromInventory('namilab', 'default', noServer, 'pane', 7), { code: 'NOT_FOUND' });
 });
 
-test('labelFor renders the documented shape', () => {
+test('labelFor renders kind-explicit Chinese labels', () => {
   const target = resolve(paneRef, inventory()).target;
-  assert.equal(labelFor('NaMILab', target), 'NaMILab · train:0.1 %7');
+  assert.equal(labelFor('NaMILab', target), 'NaMILab · 窗格 train:0.1 %7');
   assert.equal(target.window.index, 0);
   assert.equal(target.pane.index, 1);
-  assert.equal(labelFor('NaMILab', { kind: 'session', sid: 3, session: { name: 'train' } }), 'NaMILab · train $3');
+  assert.equal(labelFor('NaMILab', { kind: 'session', sid: 3, session: { name: 'train' } }), 'NaMILab · 会话 train');
+  assert.equal(labelFor('NaMILab', { kind: 'window', sid: 3, wid: 5, session: { name: 'train' }, window: { index: 0, name: 'shell' } }), 'NaMILab · 窗口 train:0 shell');
   assert.equal(labelFor('NaMILab', { kind: 'server', gen: GEN }), `NaMILab · server ${GEN}`);
   assert.equal(labelFor('NaMILab', { kind: 'host' }), 'NaMILab');
   assert.equal(labelFor('', { kind: 'host' }), 'host');

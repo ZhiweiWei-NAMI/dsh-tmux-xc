@@ -306,7 +306,7 @@ test('registrySpec declares the three tables and is path-safe', () => {
   assert.equal(spec.name, domainName);
   assert.equal(spec.version, 1);
   assert.equal(spec.layout, 'per-record');
-  assert.deepEqual(Object.keys(spec.tables), ['hosts', 'resources', 'conversations']);
+  assert.deepEqual(Object.keys(spec.tables), ['hosts', 'resources', 'conversations', 'settings', 'aliases']);
   assert.match(spec.name, /^[a-z][a-z0-9_]*$/);
   // DESIGN spellings are accepted and normalized to the DSH unit charset.
   assert.equal(registrySpec('dsh-tmux-xc').name, 'dsh_tmux_xc');
@@ -440,4 +440,73 @@ test('an opened domain is closed if obtaining its tables fails', async () => {
 test('openRegistry rejects a missing facility and a bad scope', async () => {
   await assert.rejects(() => openRegistry({}, { scope: 'user' }), { code: 'INVALID_ARGUMENT' });
   await assert.rejects(() => openRegistry({ storage: { domain: { open: async () => ({}) } } }, { scope: 'global' }), { code: 'INVALID_ARGUMENT' });
+});
+
+test('settings round-trip stores only overrides and merges/clears them', async () => {
+  const registry = memoryRegistry();
+  assert.deepEqual(await registry.getSettings(), { approval: {} });
+
+  const first = await registry.setSettings({ approval: { create: 'ask', send: 'allow' } });
+  assert.deepEqual(first, { approval: { create: 'ask', send: 'allow' } });
+  assert.deepEqual(await registry.getSettings(), { approval: { create: 'ask', send: 'allow' } });
+
+  const merged = await registry.setSettings({ approval: { send: 'ask', detach: 'allow' } });
+  assert.deepEqual(merged, { approval: { create: 'ask', send: 'ask', detach: 'allow' } });
+
+  // A key set to null removes the stored override.
+  const cleared = await registry.setSettings({ approval: { send: null } });
+  assert.deepEqual(cleared, { approval: { create: 'ask', detach: 'allow' } });
+  assert.deepEqual(await registry.getSettings(), { approval: { create: 'ask', detach: 'allow' } });
+});
+
+test('setSettings rejects kill, unknown keys and non-ask/allow values', async () => {
+  const registry = memoryRegistry();
+  for (const input of [
+    null,
+    [],
+    {},
+    { approval: null },
+    { approval: [] },
+    { approval: { kill: 'allow' } },
+    { approval: { create: 'ask', other: 'allow' } },
+    { approval: { create: 'sometimes' } },
+    { approval: { send: 1 } },
+    { ui: {} },
+  ]) {
+    await assert.rejects(() => registry.setSettings(input), { code: 'INVALID_ARGUMENT' }, JSON.stringify(input));
+  }
+});
+
+test('setAlias sanitizes, clamps to 40 chars and requires an existing resource key', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  await assert.rejects(() => registry.setAlias('missing', 'x'), { code: 'NOT_FOUND' });
+
+  assert.deepEqual(await registry.setAlias(paneKey, '  my [pane] \n label  '), { key: paneKey, alias: 'my pane label' });
+  const list = await registry.aliasList();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].key, paneKey);
+  assert.equal(list[0].alias, 'my pane label');
+  assert.equal(typeof list[0].updatedAt, 'number');
+
+  assert.deepEqual(await registry.setAlias(paneKey, null), { key: paneKey, alias: null });
+  assert.deepEqual(await registry.aliasList(), []);
+
+  assert.deepEqual(await registry.setAlias(paneKey, ''), { key: paneKey, alias: null });
+  await assert.rejects(() => registry.setAlias(paneKey, 'x'.repeat(41)), { code: 'INVALID_ARGUMENT' });
+  await assert.rejects(() => registry.setAlias(paneKey, 123), { code: 'INVALID_ARGUMENT' });
+  await assert.rejects(() => registry.setAlias('', 'x'), { code: 'INVALID_ARGUMENT' });
+  // Control and bidi characters are stripped, so an alias made only of them is empty.
+  await assert.rejects(() => registry.setAlias(paneKey, '\u202e\u061c'), { code: 'INVALID_ARGUMENT' });
+});
+
+test('aliases are keyed by resource key and updatedAt is preserved', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  const first = await registry.setAlias(paneKey, 'editor');
+  assert.equal(first.alias, 'editor');
+  const list = await registry.aliasList();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].key, paneKey);
+  assert.equal(typeof list[0].updatedAt, 'number');
 });

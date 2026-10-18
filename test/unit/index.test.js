@@ -43,6 +43,20 @@ test('Config makes ssh optional and skips alias validation only for local hosts'
   assert.ok(Config['~standard'].validate({ hosts: [{ id: 'local', ssh: 'localhost', transport: 'other' }] }).issues);
 });
 
+test('Config defaults approval to allow/allow/ask and send.enterDelayMs to 400', () => {
+  const parsed = config({ hosts: [{ id: 'local', transport: 'local' }] });
+  assert.deepEqual(parsed.approval, { create: 'allow', send: 'allow', detach: 'ask' });
+  assert.deepEqual(parsed.send, { enterDelayMs: 400 });
+});
+
+test('send.enterDelayMs is clamped to 0..5000', () => {
+  assert.equal(config({ send: { enterDelayMs: 0 } }).send.enterDelayMs, 0);
+  assert.equal(config({ send: { enterDelayMs: 5000 } }).send.enterDelayMs, 5000);
+  for (const enterDelayMs of [-1, 5001, 1.5]) {
+    assert.ok(Config['~standard'].validate({ send: { enterDelayMs } }).issues, String(enterDelayMs));
+  }
+});
+
 function fakeCtx() {
   const tools = new Map();
   const listeners = new Map();
@@ -144,7 +158,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     const dispose = injection.callback(scope.ctx);
     assert.equal(typeof dispose, 'function');
     activeScopes.add(dispose);
-    assert.equal(scope.routes.size, 5);
+    assert.equal(scope.routes.size, 7);
     const route = scope.routes.get('/api/tmux-xc/hosts');
     const response = await route.fetch(new Request('http://localhost/api/tmux-xc/hosts'));
     assert.equal(response.status, 200);
@@ -155,7 +169,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     await dispose(); // Cordis disposes the callback result when connection goes away.
     activeScopes.delete(dispose);
     assert.equal(scope.routes.size, 0);
-    assert.equal(scope.removed.length, 5);
+    assert.equal(scope.removed.length, 7);
     assert.equal(tools.size, 11, 'connection loss must not dispose tools');
   }
 

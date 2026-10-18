@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from '../../lib/hooks.js';
 import { memoryRegistry } from '../../lib/registry.js';
-import { encodeRef, formatToken } from '../../lib/core/uri.js';
+import { decodeRef, encodeRef, formatToken, resourceKey } from '../../lib/core/uri.js';
 
 const uri = encodeRef({ hostId: 'lab', hostFp: '123456abcdef', socketId: 'default', gen: '1-2', kind: 'pane', sid: 0, wid: 0, pid: 0 });
 const message = (kind = 'user') => ({ role: 'user', source: { kind }, content: [{ type: 'text', text: formatToken('pane', uri) }] });
@@ -68,6 +68,18 @@ test('compaction-only reannouncement remains first-step-only', async (t) => {
   assert.equal((await f.run(1, [])).messages.length, 1);
   assert.equal(f.resolutions(), 1);
   assert.deepEqual((await f.run(1, [])).messages, []);
+});
+
+test('re-announced reference index includes the alias when one exists', async (t) => {
+  const f = fixture(t);
+  await f.registry.resourceUpsert({ uri });
+  await f.registry.setAlias(resourceKey(decodeRef(uri)), '编辑器');
+  await f.registry.conversationAddRefs('conversation', [{ uri, label: 'pane' }]);
+  f.events.push({ type: 'compaction/summary', time: 1 });
+  const result = await f.run(1, []);
+  assert.equal(result.messages.length, 1);
+  assert.ok(result.messages[0].content[0].text.includes('（别名：编辑器）'));
+  assert.match(result.messages[0].content[0].text, /TARGET_GONE/);
 });
 
 test('rejected or already-aborted batches do not capture references', async (t) => {

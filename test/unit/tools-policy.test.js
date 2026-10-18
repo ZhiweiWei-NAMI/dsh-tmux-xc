@@ -43,12 +43,13 @@ function fakeCtx() {
   return { ctx, registered, listeners };
 }
 
-function fakeService() {
+function fakeService(registry) {
   return {
     describeForApproval: async () => ({
       en: 'approve this', zh: '批准此操作',
       identity: { hostId: 'local', hostFp: 'fp', socketId: 'default', gen: 'g1', kind: 'pane', sid: 1, wid: 2, pid: 7 },
     }),
+    ...(registry !== undefined ? { registry } : {}),
   };
 }
 
@@ -75,15 +76,20 @@ test('registers exactly the DESIGN §8 tool surface', () => {
   assert.deepEqual(registered.map((d) => d.name).sort(), [...ALL_TOOLS].sort());
 });
 
-test('create/send/detach ask when config says ask', async () => {
+test('create/send/detach ask when config says ask, naming the policy key', async () => {
   const { ctx, listeners } = fakeCtx();
   registerTools(ctx, fakeService(), { approval: { create: 'ask', send: 'ask', detach: 'ask' } });
   const listener = preExecute(listeners);
   for (const name of ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_detach']) {
     const decision = await listener(exec(name), allow);
     assert.equal(decision.kind, 'ask', `${name} should ask`);
-    assert.equal(decision.displayReason.en, 'approve this');
+    assert.ok(decision.displayReason.en.includes('approve this'), decision.displayReason.en);
+    assert.ok(decision.displayReason.en.includes('审批'), decision.displayReason.en);
+    assert.ok(decision.displayReason.zh.includes('批准此操作'), decision.displayReason.zh);
   }
+  const send = await listener(exec('tmux_xc_send'), allow);
+  assert.ok(send.displayReason.en.includes('"send"'), send.displayReason.en);
+  assert.ok(send.displayReason.zh.includes('“send”'), send.displayReason.zh);
 });
 
 test('kill always asks, even when config would allow others', async () => {
@@ -102,6 +108,42 @@ test('create/send/detach allow when config says allow', async () => {
     const decision = await listener(exec(name), allow);
     assert.equal(decision.kind, 'allow', `${name} should be allowed by config`);
   }
+});
+
+test('built-in defaults are allow/allow/ask when nothing is configured', async () => {
+  const { ctx, listeners } = fakeCtx();
+  registerTools(ctx, fakeService(), {});
+  const listener = preExecute(listeners);
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow');
+  assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'allow');
+  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask');
+});
+
+test('panel override wins over config, and null clears back to config', async () => {
+  let stored = { approval: { send: 'ask' } };
+  const registry = {
+    getSettings: async () => ({ approval: { ...stored.approval } }),
+  };
+  const { ctx, listeners } = fakeCtx();
+  registerTools(ctx, fakeService(registry), { approval: { send: 'allow', create: 'ask' } });
+  const listener = preExecute(listeners);
+  assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'ask', 'panel ask beats config allow');
+
+  stored = { approval: { send: null } };
+  assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'allow', 'cleared panel override falls back to config');
+  stored = { approval: {} };
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'ask', 'no panel override falls back to config ask');
+  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask', 'detach uses the built-in default');
+});
+
+test('kill always asks and the ask reason names the fixed policy', async () => {
+  const { ctx, listeners } = fakeCtx();
+  registerTools(ctx, fakeService(), { approval: { create: 'allow', send: 'allow', detach: 'allow' } });
+  const listener = preExecute(listeners);
+  const decision = await listener(exec('tmux_xc_kill'), allow);
+  assert.equal(decision.kind, 'ask');
+  assert.ok(decision.displayReason.en.includes('"kill"'), decision.displayReason.en);
+  assert.ok(decision.displayReason.en.includes('cannot be changed'), decision.displayReason.en);
 });
 
 test('never-ask tools are allowed', async () => {

@@ -30,7 +30,9 @@ function execution(name = 'tmux_xc_send', args) {
     agent: { session: { id: 'chat' } }, signal: controller.signal, controller,
   };
 }
-function setup(service = {}, config = {}) {
+// These boundary tests exercise the ask/pin mechanism, so default them to ask
+// (the allow/allow/ask built-in defaults are covered by tools-policy.test.js).
+function setup(service = {}, config = { approval: { create: 'ask', send: 'ask', detach: 'ask' } }) {
   const tools = new Map();
   const listeners = new Map();
   const ctx = {
@@ -119,7 +121,7 @@ test('ask execution fails closed without a pin, including legacy fake services',
   const fixture = setup({ async send() { assert.fail('must not mutate'); } });
   await assert.rejects(fixture.run(execution()), (error) => {
     assert.ok(error instanceof HarnessError);
-    assert.equal(error.code, CODES.INVALID_ARGUMENT);
+    assert.equal(error.code, CODES.APPROVAL_MISSING);
     return true;
   });
   const missing = setup({ async describeForApproval() { return { en: 'old fake', zh: '旧' }; } });
@@ -207,7 +209,7 @@ for (const invalidation of ['abort', 'result', 'dispose']) {
     if (invalidation === 'result') fixture.result(exec, { isError: true });
     if (invalidation === 'dispose') fixture.dispose();
     finishDescription({ en: 'approve', zh: '批准', identity: identity() });
-    await assert.rejects(pre, { code: CODES.CANCELLED });
+    await assert.rejects(pre, { code: CODES.APPROVAL_CANCELLED });
     assert.equal(getEventListeners(exec.signal, 'abort').length, 0);
     fixture.dispose();
   });
