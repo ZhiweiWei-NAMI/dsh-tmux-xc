@@ -93,39 +93,36 @@ test('switch ON (default) asks all four actions and names the policy key', async
   assert.ok(send.displayReason.zh.includes('“send”'), send.displayReason.zh);
 });
 
-test('switch precedence: stored panel boolean wins for all four actions over config and legacy allow', async () => {
-  const actions = ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_kill', 'tmux_xc_detach'];
-  for (const configured of [true, false]) {
-    let stored = {};
-    const registry = { getSettings: async () => ({ approval: { ...stored.approval } }) };
-    const { ctx, listeners } = fakeCtx();
-    registerTools(ctx, fakeService(registry), {
-      approval: { enabled: configured, create: 'allow', send: 'allow', detach: 'allow' },
-    });
-    const listener = preExecute(listeners);
-
-    for (const enabled of [false, true]) {
-      stored = { approval: { enabled } };
-      for (const name of actions) {
-        assert.equal((await listener(exec(name), allow)).kind, enabled ? 'ask' : 'allow',
-          `${name}: panel ${enabled} overrides config ${configured} and legacy allow`);
-      }
-    }
-
-    for (const settings of [{ approval: { enabled: null } }, {}]) {
-      stored = settings;
-      for (const name of actions) {
-        const expected = configured && name === 'tmux_xc_kill' ? 'ask' : 'allow';
-        assert.equal((await listener(exec(name), allow)).kind, expected,
-          `${name}: cleared or absent panel falls back to config ${configured} and legacy allow`);
+test('approval precedence matrix: panel > explicit config > legacy allow > default ask', async () => {
+  for (const panel of [undefined, null, true, false, 'unavailable']) {
+    for (const configured of [undefined, true, false]) {
+      for (const legacy of [undefined, 'ask', 'allow']) {
+        const registry = { async getSettings() {
+          if (panel === 'unavailable') throw new Error('settings unavailable');
+          return panel === undefined ? {} : { approval: { enabled: panel } };
+        } };
+        const { ctx, listeners } = fakeCtx();
+        const approval = {
+          ...(configured === undefined ? {} : { enabled: configured }),
+          ...(legacy === undefined ? {} : { create: legacy, send: legacy, detach: legacy }),
+        };
+        const dispose = registerTools(ctx, fakeService(registry), { approval });
+        for (const action of ['create', 'send', 'kill', 'detach']) {
+          const expected = typeof panel === 'boolean' ? (panel ? 'ask' : 'allow')
+            : typeof configured === 'boolean' ? (configured ? 'ask' : 'allow')
+              : legacy === 'allow' && action !== 'kill' ? 'allow' : 'ask';
+          assert.equal((await preExecute(listeners)(exec(`tmux_xc_${action}`), allow)).kind, expected,
+            `${action}: panel=${panel}, configured=${configured}, legacy=${legacy}`);
+        }
+        dispose();
       }
     }
   }
 });
 
-test('legacy per-key allow is honoured only for that key when the switch is on', async () => {
+test('legacy per-key allow is honoured only for that key when enabled is absent', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { enabled: true, create: 'allow', send: 'allow' } });
+  registerTools(ctx, fakeService(), { approval: { create: 'allow', send: 'allow' } });
   const listener = preExecute(listeners);
   assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow');
   assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'allow');
@@ -227,6 +224,31 @@ test('workspace attribution obtains a late workingDirectory service per call', a
     { sessionId: 'chat', workspace: '/late-workspace' },
     { sessionId: 'chat', workspace: undefined },
   ]);
+});
+
+test('send rendering treats unknown Enter delivery as unknown and requires capture before retry', () => {
+  const { ctx, registered } = fakeCtx();
+  const dispose = registerTools(ctx, fakeService(), {});
+  const send = registered.find((definition) => definition.name === 'tmux_xc_send');
+  for (const enter of ['unknown', null, undefined]) {
+    for (const state of ['unknown', 'pending']) {
+      const text = send.output.render({}, {
+        target: 'local:default:%7', delivered: { text: true, keys: 0, enter },
+        submission: { state, checked: false },
+      }).map((block) => block.text).join('\n');
+      assert.match(text, /enter=unknown/);
+      assert.match(text, /capture and verify before retrying/);
+      assert.doesNotMatch(text, /bytes were delivered|enter=no|send Enter again/);
+    }
+  }
+  for (const enter of [true, false]) {
+    const text = send.output.render({}, {
+      delivered: { text: true, keys: 0, enter }, submission: { state: 'pending', checked: true },
+    }).map((block) => block.text).join('\n');
+    assert.match(text, new RegExp(`enter=${enter ? 'yes' : 'no'}`));
+    assert.match(text, /send Enter again/);
+  }
+  dispose();
 });
 
 test('capture output is fenced as untrusted', () => {

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TmuxXcService, approvalPreview } from '../../lib/service.js';
 import { memoryRegistry } from '../../lib/registry.js';
+import { registerRoutes } from '../../lib/routes.js';
 import { hostFingerprint } from '../../lib/core/parse.js';
 import { encodeRef, decodeRef, formatToken, resourceKey } from '../../lib/core/uri.js';
 import { XcError, CODES } from '../../lib/core/errors.js';
@@ -110,7 +111,8 @@ function makeTransport(expectedHost = {
       }
       if (script.includes('detach-client')) return { records: state.detach, stderr: '', exitCode: 0 };
       if (script.includes('kill-pane') || script.includes('kill-window') || script.includes('kill-session')) {
-        return { records: [], stderr: '', exitCode: 0 };
+        const target = script.replace(/\\+/g, '').match(/kill-(?:pane|window|session) -t "([$@%]\d+)"/)[1];
+        return { records: state.kill ?? [['ok', target]], stderr: '', exitCode: 0 };
       }
       if (script.includes('new-session') || script.includes('new-window') || script.includes('split-window')) {
         return { records: state.created, stderr: '', exitCode: 0 };
@@ -879,9 +881,10 @@ test('close aborts and settles complete in-flight operations before returning', 
 });
 
 /** Records a successful text+Enter send, with an optional cursor row. */
-function sendRecords({ cursorLine = null, enter = true } = {}) {
-  const records = [['begin'], ['ok', '%7', '5', '3']];
-  if (enter) records.push(['enter', '5']);
+function sendRecords({ cursorLine = null, enter = true, text = 'hello' } = {}) {
+  const bytes = String(Buffer.byteLength(text));
+  const records = [['begin'], ['ok', '%7', bytes, '1']];
+  if (enter) records.push(['enter', bytes]);
   if (cursorLine !== null) records.push(['cursor', Buffer.from(cursorLine).toString('hex'), '4']);
   records.push(['end']);
   return records;
@@ -890,7 +893,7 @@ function sendRecords({ cursorLine = null, enter = true } = {}) {
 test('C5: send returns delivered and submission after a cleared Enter', async () => {
   const transport = makeTransport();
   const { service } = makeService(transport);
-  transport.state.send = sendRecords({ cursorLine: '~/project $ ' });
+  transport.state.send = sendRecords({ cursorLine: '~/project $ ', text: 'echo hi' });
   const result = await service.send({ uri: ref(), text: 'echo hi', enter: true });
   assert.deepEqual(result.delivered, { text: true, keys: 0, enter: true });
   assert.equal(result.submission.checked, true);
@@ -901,7 +904,7 @@ test('C5: send returns delivered and submission after a cleared Enter', async ()
 test('C5: submission is pending while the sent text still occupies the cursor line', async () => {
   const transport = makeTransport();
   const { service } = makeService(transport);
-  transport.state.send = sendRecords({ cursorLine: '> please run the tests now' });
+  transport.state.send = sendRecords({ cursorLine: '> please run the tests now', text: 'please run the tests now' });
   const result = await service.send({ uri: ref(), text: 'please run the tests now', enter: true });
   assert.equal(result.delivered.enter, true);
   assert.deepEqual(result.submission, { checked: true, state: 'pending' });
@@ -911,10 +914,10 @@ test('C5: submission only looks at the last 24 visible characters', async () => 
   const transport = makeTransport();
   const { service } = makeService(transport);
   const text = `${'x'.repeat(60)}TAIL_24_CHARS_1234567890123456`;
-  transport.state.send = sendRecords({ cursorLine: 'pane output tail' });
+  transport.state.send = sendRecords({ cursorLine: 'pane output tail', text });
   const result = await service.send({ uri: ref(), text, enter: true });
   assert.equal(result.submission.state, 'cleared', 'an old prefix does not make it pending');
-  transport.state.send = sendRecords({ cursorLine: 'TAIL_24_CHARS_1234567890123456' });
+  transport.state.send = sendRecords({ cursorLine: 'TAIL_24_CHARS_1234567890123456', text });
   assert.equal((await service.send({ uri: ref(), text, enter: true })).submission.state, 'pending');
 });
 
@@ -948,7 +951,7 @@ test('C5: a failed Enter guard reports delivered text and the guard code', async
   );
   assert.deepEqual(error.details.delivered, { text: true, keys: 0, enter: false });
   assert.equal(error.details.enterFailure, 'TARGET_CHANGED');
-  assert.match(error.message, /text delivered but Enter was not delivered/);
+  assert.match(error.message, /text\/keys delivered but Enter was not delivered/);
   assert.equal(transport.calls.filter((call) => call.mutating).length, 1, 'never replayed');
 });
 
@@ -964,6 +967,42 @@ test('C5: enter-only guard failures still report the precise code and no text', 
   assert.deepEqual(error.details.delivered, { text: false, keys: 0, enter: false });
 });
 
+test('RFA: unknown Enter delivery never claims non-delivery or safe replay', async () => {
+  for (const textStep of [false, true]) {
+    for (const acknowledged of [false, true]) {
+      const transport = makeTransport();
+      const { service } = makeService(transport);
+      transport.state.send = [
+        ...(textStep ? [['ok', '%7', '5', '1']] : []),
+        ...(acknowledged ? [['enter', textStep ? '5' : '0']] : []),
+        ['enterfail', 'OUTCOME_UNKNOWN', ''],
+      ];
+      await assert.rejects(service.send({ uri: ref(), ...(textStep ? { text: 'hello' } : {}), enter: true }), (error) => {
+        assert.equal(error.code, CODES.OUTCOME_UNKNOWN);
+        assert.deepEqual(error.details.delivered, { text: textStep, keys: 0, enter: acknowledged ? true : 'unknown' });
+        assert.match(error.message, /unknown/);
+        assert.match(error.message, /verify with capture before retrying/);
+        assert.doesNotMatch(error.message, /not delivered|nothing was sent/);
+        return true;
+      });
+      assert.equal(transport.calls.filter((call) => call.mutating).length, 1, 'no automatic retry');
+    }
+  }
+});
+
+test('RFA: malformed Enter records are not delivery acknowledgements', async () => {
+  for (const record of [['enter'], ['enter', '5'], ['enter', '0', 'extra']]) {
+    const transport = makeTransport();
+    const { service } = makeService(transport);
+    transport.state.send = [record, ['enterfail', 'OUTCOME_UNKNOWN', '']];
+    await assert.rejects(service.send({ uri: ref(), enter: true }), (error) => {
+      assert.equal(error.code, CODES.OUTCOME_UNKNOWN);
+      assert.equal(error.details.delivered.enter, 'unknown');
+      return true;
+    });
+  }
+});
+
 test('C5: send.enterDelayMs defaults to 400 and is clamped to [0, 5000]', async () => {
   for (const [value, expected] of [
     [undefined, 'sleep 0.400 2>/dev/null || sleep 1'],
@@ -976,7 +1015,7 @@ test('C5: send.enterDelayMs defaults to 400 and is clamped to [0, 5000]', async 
     const transport = makeTransport();
     const config = value === undefined ? CFG : { ...CFG, send: { enterDelayMs: value } };
     const { service } = makeService(transport, { config });
-    transport.state.send = sendRecords({ cursorLine: '$ ' });
+    transport.state.send = sendRecords({ cursorLine: '$ ', text: 'x' });
     await service.send({ uri: ref(), text: 'x', enter: true });
     const mutating = transport.calls.filter((call) => call.mutating);
     assert.equal(mutating.length, 1);
@@ -1114,6 +1153,112 @@ test('service.alias adopts a not-yet-registered uri before setting its alias', a
   assert.deepEqual((await registry.aliasList()).map((item) => item.key), [key]);
 });
 
+test('RFA: remove-plan includes exact socket scope, session ids and remote names', async () => {
+  const host = { ...CFG.hosts[0], sockets: [
+    { id: 'named', name: 'work' }, { id: 'path', path: '/tmp/other socket' }, { id: 'default' },
+  ] };
+  const transport = makeTransport({ ...host, transport: 'ssh', newSession: {} });
+  const { service } = makeService(transport, { config: { ...CFG, hosts: [host] } });
+  const plan = await service.removePlan({ hostId: host.id });
+  assert.equal(plan.sessions.length, 3);
+  assert.deepEqual(plan.sessions.map(({ socketId, socketLabel, sid, name }) => ({ socketId, socketLabel, sid, name })), [
+    { socketId: 'named', socketLabel: 'work', sid: 3, name: 'train' },
+    { socketId: 'path', socketLabel: '/tmp/other socket', sid: 3, name: 'train' },
+    { socketId: 'default', socketLabel: 'default', sid: 3, name: 'train' },
+  ]);
+  for (const session of plan.sessions) {
+    assert.equal(session.label, 'NaMILab · 会话 train');
+    assert.equal(decodeRef(session.uri).socketId, session.socketId);
+  }
+});
+
+test('RFA: invalid removal batches fail before any remote contact or kill', async () => {
+  const valid = ref({ kind: 'session', wid: null, pid: null });
+  for (const [invalid, code] of [
+    ['not-a-uri', CODES.INVALID_ARGUMENT],
+    [ref({ hostId: 'other', kind: 'session', wid: null, pid: null }), CODES.INVALID_ARGUMENT],
+    [ref({ socketId: 'unconfigured', kind: 'session', wid: null, pid: null }), CODES.SOCKET_NOT_ALLOWED],
+    [ref(), CODES.INVALID_ARGUMENT],
+    [ref({ kind: 'window', pid: null }), CODES.INVALID_ARGUMENT],
+    [valid, CODES.INVALID_ARGUMENT],
+    [null, CODES.INVALID_ARGUMENT],
+  ]) {
+    const transport = makeTransport();
+    const { service, registry } = makeService(transport);
+    await assert.rejects(service.removeHost({ host: 'namilab', mode: 'remote', killUris: [valid, invalid], confirm: 'namilab' }), { code });
+    assert.equal(transport.calls.length, 0, 'prevalidation has no remote side effects');
+    assert.deepEqual(registry.removedHosts(), []);
+    assert.equal(registry.version, 0);
+  }
+});
+
+test('RFA: successful kills invalidate version, refused kills do not', async () => {
+  const transport = makeTransport();
+  const { service, registry } = makeService(transport);
+  const before = registry.version;
+  await service.kill({ uri: ref(), confirm: 'namilab:default:%7' });
+  assert.equal(registry.version, before + 1);
+  transport.state.scriptError = new XcError(CODES.TARGET_CHANGED, 'guard refused');
+  await assert.rejects(service.kill({ uri: ref(), confirm: 'namilab:default:%7' }), { code: CODES.TARGET_CHANGED });
+  assert.equal(registry.version, before + 1, 'a guard refusal is not a successful kill');
+});
+
+test('RFA: missing or wrong kill acknowledgements never report success or remove a host', async () => {
+  for (const records of [[], [['ok', '%99']], [['ok', '%7', 'extra']]]) {
+    const transport = makeTransport();
+    transport.state.kill = records;
+    const { service, registry } = makeService(transport);
+    await assert.rejects(service.kill({ uri: ref(), confirm: 'namilab:default:%7' }), { code: CODES.OUTCOME_UNKNOWN });
+    assert.equal(registry.version, 0);
+    const result = await service.removeHost({ host: 'namilab', mode: 'remote', confirm: 'namilab',
+      killUris: [ref({ kind: 'session', wid: null, pid: null })] });
+    assert.equal(result.removed, false);
+    assert.equal(result.remote[0].code, CODES.OUTCOME_UNKNOWN);
+    assert.equal(result.remote[0].label, 'namilab:default:$3');
+    assert.equal(registry.version, 0);
+    assert.deepEqual(registry.removedHosts(), []);
+  }
+});
+
+test('RFA: panel kill uses URI-derived confirmation and invalidates the version endpoint', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  const routes = new Map();
+  registerRoutes({ connection: { fetch: { register(route) {
+    routes.set(route.path, route.fetch);
+    return () => {};
+  } } } }, service);
+  const response = await routes.get('/api/tmux-xc/kill')(new Request('http://localhost/api/tmux-xc/kill', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ uri: ref(), confirm: 'namilab:default:%7' }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).killed, true);
+  const calls = transport.calls.length;
+  const version = await routes.get('/api/tmux-xc/version')(new Request('http://localhost/api/tmux-xc/version'));
+  assert.equal((await version.json()).version, 1);
+  assert.equal(transport.calls.length, calls, 'polling version never contacts the remote');
+});
+
+test('RFA: partial host removal invalidates each successful kill and labels unreachable targets', async () => {
+  const transport = makeTransport();
+  const { service, registry } = makeService(transport);
+  const uri3 = ref({ kind: 'session', wid: null, pid: null });
+  const uri4 = ref({ kind: 'session', sid: 4, wid: null, pid: null });
+  let inventories = 0;
+  transport.state.inventory = () => {
+    if (++inventories > 1) throw new XcError(CODES.HOST_UNREACHABLE, 'offline');
+    return [hostRecord(), paneRecord()];
+  };
+  const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri3, uri4], confirm: 'namilab' });
+  assert.equal(result.removed, false);
+  assert.equal(registry.version, 1, 'successful kill invalidates even without a local purge');
+  assert.deepEqual(result.remote.map(({ label, ok }) => ({ label, ok })), [
+    { label: 'namilab:default:$3', ok: true }, { label: 'namilab:default:$4', ok: false },
+  ]);
+  assert.equal(result.remote[1].code, CODES.HOST_UNREACHABLE);
+});
+
 test('host/remove remote kills every session and removes locally when all succeed', async () => {
   const transport = makeTransport();
   transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 3, pid: 7 }), paneRecord({ sid: 4, pid: 8 })];
@@ -1142,7 +1287,8 @@ test('host/remove remote reports an honest per-uri result and stays unremoved on
   assert.equal(result.remote[0].ok, true);
   assert.equal(result.remote[1].ok, false);
   assert.equal(result.remote[1].code, CODES.TARGET_GONE);
-  assert.equal(Object.hasOwn(result.remote[1], 'label'), false);
+  assert.equal(result.remote[0].label, 'namilab:default:$3');
+  assert.equal(result.remote[1].label, 'namilab:default:$99');
   assert.deepEqual(registry.removedHosts(), []);
   assert.equal((await registry.resourceList({ all: true })).length, 0, 'no local purge on a failed remote removal');
 });

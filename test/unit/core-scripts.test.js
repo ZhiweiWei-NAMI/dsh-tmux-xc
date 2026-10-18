@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { XcError, CODES } from '../../lib/core/errors.js';
 import {
   newNonce, socketArgs, inventoryScript, guardSnippet, createSessionScript,
@@ -405,6 +406,72 @@ test('C5: the Enter guard failure is a distinct, framed record and stops the cur
   const enterFailure = script.indexOf('enter_failed=1');
   const cursorProbe = script.indexOf("#{cursor_y}");
   assert.ok(enterFailure < cursorProbe, 'guard the probe behind the failure flag');
+});
+
+test('RFA: a text/keys refusal or missing exact ok stops before delay and Enter', () => {
+  const frame = (...fields) => `XC1${NONCE}\x1f${fields.join(`\x1f${NONCE}\x1f`)}\x1e${NONCE}\x1e`;
+  for (const options of [{ hex: ['61'] }, { keys: ['Tab'] }]) {
+    const bytes = options.hex ? '1' : '0';
+    const ok = frame('ok', '%7', bytes, '1');
+    for (const output of [
+      frame('err', 'PANE_IN_MODE'),
+      frame('guarded'),
+      frame('ok', '%8', bytes, '1'),
+      frame('ok', '%7', bytes, '2'),
+      ok.slice(0, -1),
+      `${ok}\n${frame('err', 'PANE_IN_MODE')}`,
+    ]) {
+      const raw = sendScript(NONCE, SOCKET, EXPECT, { ...options, enter: true });
+      // Run only the generated queue logic under a shell-function stub. This
+      // never starts tmux/SSH or the host-probing prologue, even during tests.
+      const body = raw.slice(raw.indexOf('out=$(tmux'));
+      const stub = `exec 3>&2\ntmux() { printf '%s\\n' '${output}'; printf 'tmux-called\\n' >&3; }\n` +
+        `sleep() { printf 'unexpected-delay\\n' >&3; }\n`;
+      const result = spawnSync('sh', ['-s'], { input: stub + body, encoding: 'utf8' });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stderr, 'tmux-called\n', 'no delay or second client after text failure');
+      const parsed = parseRecords(result.stdout, NONCE);
+      assert.equal(parsed.sawEnd, true);
+      assert.ok(parsed.records.some((record) => record[0] === 'err'));
+      assert.equal(parsed.records.some((record) => record[0] === 'enter'), false);
+    }
+  }
+});
+
+test('RFA: Enter requires its acknowledgement and preserves post-guard uncertainty', () => {
+  const raw = sendScript(NONCE, SOCKET, EXPECT, { enter: true });
+  const enter = raw.slice(raw.indexOf('enter_failed=0'), raw.indexOf('if [ "$enter_failed" -eq 0 ]'));
+  const guarded = `XC1${NONCE}\x1fguarded\x1e${NONCE}\x1e`;
+  const ack = `XC1${NONCE}\x1fenter\x1f${NONCE}\x1f0\x1e${NONCE}\x1e`;
+  assert.ok(enter.includes(`*'${guarded}'*|*'${ack}'*) code=OUTCOME_UNKNOWN`));
+  assert.ok(enter.includes(`*'${ack}'*) printf 'XC1${NONCE}\\037enter`));
+  assert.ok(enter.includes('Enter acknowledgement missing; verify with capture before retrying'));
+  assert.ok(enter.indexOf('\\037enter\\037') < enter.indexOf('\\037enterfail'));
+});
+
+test('RFA: missing, malformed and interrupted Enter acknowledgements stay unknown', () => {
+  const frame = (...fields) => `XC1${NONCE}\x1f${fields.join(`\x1f${NONCE}\x1f`)}\x1e${NONCE}\x1e`;
+  const ack = frame('enter', '0');
+  for (const [output, status, delivered] of [
+    ['', 0, false], [frame('enter', '5'), 0, false], [ack.slice(0, -1), 0, false],
+    [`${frame('guarded')}\nno current target`, 1, false],
+    [`${frame('guarded')}\n${ack}\nno current target`, 1, true],
+  ]) {
+    const raw = sendScript(NONCE, SOCKET, EXPECT, { enter: true });
+    const body = raw.slice(raw.indexOf('out=$(tmux'));
+    const stub = `exec 3>&2\ntmux() { printf '%s\\n' '${output}'; printf 'tmux-called\\n' >&3; return ${status}; }\n` +
+      `sleep() { printf 'unexpected-delay\\n' >&3; }\n`;
+    const result = spawnSync('sh', ['-s'], { input: stub + body, encoding: 'utf8' });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, 'tmux-called\n', 'no cursor probes after an uncertain Enter');
+    const parsed = parseRecords(result.stdout, NONCE);
+    assert.equal(parsed.sawEnd, true);
+    assert.ok(parsed.records.some((record) => record[0] === 'enterfail' && record[1] === 'OUTCOME_UNKNOWN'));
+    assert.equal(parsed.records.some((record) => record[0] === 'enter'), delivered);
+    assert.equal(parsed.records.some((record) => record[0] === 'cursor'), false);
+  }
 });
 
 test('C5: enter-only and keys-only keep their shape without a needless delay', () => {

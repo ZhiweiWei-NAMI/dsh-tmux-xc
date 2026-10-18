@@ -134,7 +134,6 @@ test('ask execution fails closed without a pin, including legacy fake services',
 for (const decision of [
   { kind: 'deny', reason: 'blocked elsewhere' },
   { kind: 'cancel' },
-  { kind: 'ask', reason: 'upstream approval' },
 ]) {
   test(`preserves upstream ${decision.kind} without obtaining a pin`, async () => {
     const fixture = setup({ async describeForApproval() { assert.fail('must preserve upstream decision'); } });
@@ -144,6 +143,126 @@ for (const decision of [
     fixture.dispose();
   });
 }
+
+for (const method of ['create', 'send', 'detach', 'kill']) {
+  for (const enabled of [true, false]) {
+    test(`${method}: DSH ask is preserved verbatim and snapshots with switch ${enabled}`, async () => {
+      const hostAsk = Object.freeze({
+        kind: 'ask', reason: 'host policy', displayReason: { en: 'Host approval', zh: '宿主审批' },
+      });
+      const original = identity();
+      const expected = { ...original };
+      let descriptions = 0;
+      let received;
+      const fixture = setup({
+        async describeForApproval(name, args, { signal }) {
+          descriptions++;
+          assert.equal(name, exec.name);
+          assert.equal(args, exec.arguments);
+          assert.equal(signal, exec.signal);
+          return { en: 'plugin reason', zh: '插件原因', identity: original };
+        },
+        async [method](args) { received = args; return {}; },
+      }, { approval: { enabled } });
+      const exec = execution(`tmux_xc_${method}`);
+      assert.equal(await fixture.pre(exec, async () => hostAsk), hostAsk);
+      original.gen = 'changed-after-description';
+      await fixture.run(exec);
+      assert.equal(descriptions, 1);
+      assert.deepEqual(received.approvalIdentity, expected);
+      assert.equal(Object.isFrozen(received.approvalIdentity), true);
+      assert.equal(getEventListeners(exec.signal, 'abort').length, 0);
+      fixture.dispose();
+    });
+  }
+
+  for (const source of ['plugin', 'DSH']) {
+    test(`${method}: ${source} snapshot survives panel switch ON to OFF before execution`, async () => {
+      let enabled = true;
+      let received;
+      const fixture = setup({
+        registry: { async getSettings() { return { approval: { enabled } }; } },
+        async [method](args) { received = args; return {}; },
+      });
+      const exec = execution(`tmux_xc_${method}`);
+      const next = source === 'DSH' ? async () => ({ kind: 'ask', reason: 'host approval' }) : allow;
+      assert.equal((await fixture.pre(exec, next)).kind, 'ask');
+      enabled = false;
+      await fixture.run(exec);
+      assert.deepEqual(received.approvalIdentity, identity());
+      assert.equal(getEventListeners(exec.signal, 'abort').length, 0);
+      fixture.dispose();
+    });
+  }
+}
+
+for (const failure of ['description throws', 'identity missing']) {
+  for (const initiallyEnabled of [true, false]) {
+    test(`DSH ask ${failure} fails closed after switch OFF (initially ${initiallyEnabled})`, async () => {
+      let enabled = initiallyEnabled;
+      let mutations = 0;
+      const hostAsk = Object.freeze({ kind: 'ask', reason: 'host approval' });
+      const fixture = setup({
+        registry: { async getSettings() { return { approval: { enabled } }; } },
+        async describeForApproval() {
+          if (failure === 'description throws') throw new XcError(CODES.SERVER_RESTARTED, 'snapshot failed');
+          return { en: 'no identity', zh: '缺少身份' };
+        },
+        async send() { mutations++; return {}; },
+      });
+      const exec = execution();
+      assert.equal(await fixture.pre(exec, async () => hostAsk), hostAsk);
+      enabled = false;
+      const result = await runtimeDispatch(fixture.tools.get(exec.name), exec);
+      assert.equal(result.isError, true);
+      assert.equal(result.error.info.code, failure === 'description throws' ? CODES.SERVER_RESTARTED : CODES.INVALID_ARGUMENT);
+      assert.equal(mutations, 0);
+      assert.equal(getEventListeners(exec.signal, 'abort').length, 0);
+      fixture.dispose();
+    });
+  }
+}
+
+for (const mismatch of ['agent', 'tool']) {
+  test(`switch OFF does not bypass pending snapshot ${mismatch} binding`, async () => {
+    let enabled = true;
+    const fixture = setup({
+      registry: { async getSettings() { return { approval: { enabled } }; } },
+      async send() { assert.fail('must not mutate with a mismatched approval'); },
+      async detach() { assert.fail('must not reuse another tool approval'); },
+    });
+    const exec = execution();
+    await fixture.pre(exec);
+    enabled = false;
+    const changed = mismatch === 'agent'
+      ? { ...exec, agent: { session: { id: 'other-chat' } } }
+      : { ...exec, name: 'tmux_xc_detach' };
+    await assert.rejects(fixture.run(changed), { code: CODES.APPROVAL_MISSING });
+    assert.equal(getEventListeners(exec.signal, 'abort').length, 0);
+    fixture.dispose();
+  });
+}
+
+test('switch OFF to ON before execution requires a snapshot rather than mutating unapproved', async () => {
+  let enabled = false;
+  const fixture = setup({
+    registry: { async getSettings() { return { approval: { enabled } }; } },
+    async describeForApproval() { assert.fail('allow must not describe'); },
+    async send() { assert.fail('must not mutate without approval'); },
+  });
+  const exec = execution();
+  assert.equal((await fixture.pre(exec)).kind, 'allow');
+  enabled = true;
+  await assert.rejects(fixture.run(exec), { code: CODES.APPROVAL_MISSING });
+  fixture.dispose();
+});
+
+test('DSH ask for a read-only tool is preserved without describing a mutation', async () => {
+  const fixture = setup({ async describeForApproval() { assert.fail('read-only asks need no mutation snapshot'); } });
+  const hostAsk = { kind: 'ask', reason: 'host approval' };
+  assert.equal(await fixture.pre(execution('tmux_xc_list'), async () => hostAsk), hostAsk);
+  fixture.dispose();
+});
 
 for (const outcome of ['completion', 'denial', 'cancellation', 'guard failure']) {
   test(`tools/result clears a pending pin on ${outcome}`, async () => {
