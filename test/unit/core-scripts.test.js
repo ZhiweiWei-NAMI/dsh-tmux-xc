@@ -195,6 +195,19 @@ test('guard compares generation and the expected ids', () => {
   assert.ok(fragment.indexOf('mismatch') < fragment.indexOf('exit 0'));
 });
 
+test('mutations guard only the ids their target implies', () => {
+  // A window is not pinned to one session (it may be linked into several).
+  const window = createWindowScript(NONCE, SOCKET, EXPECT, {});
+  assert.ok(window.includes(`[ "$2" = '$3' ]`));
+  assert.equal(window.includes('[ "$3"'), false);
+  assert.equal(window.includes('[ "$4"'), false);
+  // Killing a session does not require an unrelated window/pane id.
+  const sessionKill = killScript(NONCE, SOCKET, EXPECT, 'session');
+  assert.equal(sessionKill.includes('[ "$3"'), false);
+  const paneKill = killScript(NONCE, SOCKET, EXPECT, 'pane');
+  assert.ok(paneKill.includes(`[ "$4" = '%7' ]`));
+});
+
 test('guard only checks the ids that were provided', () => {
   const fragment = guardSnippet(NONCE, SOCKET, { gen: GEN, target: '$3', sid: 3 });
   assert.ok(fragment.includes(`[ "$2" = '$3' ]`));
