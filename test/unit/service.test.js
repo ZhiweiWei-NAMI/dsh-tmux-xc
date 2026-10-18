@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { TmuxXcService, approvalPreview } from '../../lib/service.js';
 import { memoryRegistry } from '../../lib/registry.js';
 import { hostFingerprint } from '../../lib/core/parse.js';
-import { encodeRef, decodeRef, formatToken } from '../../lib/core/uri.js';
+import { encodeRef, decodeRef, formatToken, resourceKey } from '../../lib/core/uri.js';
 import { XcError, CODES } from '../../lib/core/errors.js';
 
 const CFG = {
@@ -17,7 +17,7 @@ const CFG = {
   connectTimeoutSec: 10,
   commandTimeoutMs: 20000,
   registryScope: 'user',
-  approval: { create: 'ask', send: 'ask', detach: 'ask' },
+  approval: { enabled: true },
   capture: { defaultLines: 80, maxLines: 2000, maxBytes: 65536 },
 };
 
@@ -995,4 +995,90 @@ test('C5: send.enterDelayMs defaults to 400 and is clamped to [0, 5000]', async 
     // The settling wait before the cursor read is always present.
     assert.ok(script.includes('sleep 0.300 2>/dev/null || sleep 1'));
   }
+});
+
+test('removed hosts are filtered from hosts/inventory and refuse every operation', async () => {
+  const transport = makeTransport();
+  const { service, registry } = makeService(transport);
+  await service.adopt({ target: ref(), by: { sessionId: 'a' } });
+
+  await service.removeHost({ host: 'namilab', mode: 'local', confirm: 'namilab' });
+
+  assert.deepEqual(service.hosts(), []);
+  assert.deepEqual((await service.inventory()).hosts, []);
+  await assert.rejects(service.resolveRef(ref()), (error) =>
+    error.code === CODES.HOST_NOT_ALLOWED && /removed in the tmux panel/.test(error.message));
+  await assert.rejects(service.capture({ uri: ref() }), (error) => error.code === CODES.HOST_NOT_ALLOWED);
+  assert.deepEqual(registry.removedHosts(), ['namilab']);
+});
+
+test('inventory decorates config alias hints and a local alias wins for its exact key', async () => {
+  const host = {
+    id: 'namilab', label: 'NaMILab', ssh: 'NaMILab', sockets: [{ id: 'default' }],
+    aliases: [
+      { session: 'train', alias: '训练会话' },
+      { session: 'train', window: 'train', alias: '训练窗口' },
+    ],
+  };
+  const transport = makeTransport({ ...host, transport: 'ssh', newSession: {} });
+  const { service, registry } = makeService(transport, { config: { ...CFG, hosts: [host] } });
+  const adopted = await service.adopt({ target: ref(), by: { sessionId: 'a' } });
+  await registry.setAlias(adopted.key, '本地窗格');
+
+  const { hosts } = await service.inventory();
+  const session = hosts[0].sockets[0].sessions[0];
+  assert.equal(session.alias, '训练会话');
+  assert.equal(session.aliasSource, 'config');
+  const window = session.windows[0];
+  assert.equal(window.alias, '训练窗口');
+  assert.equal(window.aliasSource, 'config');
+  const pane = window.panes[0];
+  assert.equal(pane.alias, '本地窗格');
+  assert.equal(pane.aliasSource, 'local');
+});
+
+test('service.alias adopts a not-yet-registered uri before setting its alias', async () => {
+  const transport = makeTransport();
+  const { service, registry } = makeService(transport);
+  const result = await service.alias({ uri: ref(), alias: '编辑器', signal: undefined });
+  assert.equal(result.alias, '编辑器');
+  assert.equal(result.entry.uri, ref());
+  assert.equal(typeof result.entry.token, 'string');
+  const key = resourceKey(decodeRef(ref()));
+  const stored = await registry.resourceGet(key);
+  assert.equal(stored.kind, 'pane');
+  assert.deepEqual((await registry.aliasList()).map((item) => item.key), [key]);
+});
+
+test('host/remove remote kills every session and removes locally when all succeed', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 3, pid: 7 }), paneRecord({ sid: 4, pid: 8 })];
+  const { service, registry } = makeService(transport);
+  const uri3 = ref({ kind: 'session', sid: 3, wid: null, pid: null });
+  const uri4 = ref({ kind: 'session', sid: 4, wid: null, pid: null });
+
+  const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri3, uri4], confirm: 'namilab' });
+  assert.equal(result.removed, true);
+  assert.deepEqual(result.remote.map((item) => item.ok), [true, true]);
+  assert.ok(result.remote.every((item) => typeof item.label === 'string'));
+  assert.deepEqual(registry.removedHosts(), ['namilab']);
+  assert.equal((await registry.resourceList({ all: true })).length, 0);
+});
+
+test('host/remove remote reports an honest per-uri result and stays unremoved on one failure', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 3, pid: 7 }), paneRecord({ sid: 4, pid: 8 })];
+  const { service, registry } = makeService(transport);
+  const uri3 = ref({ kind: 'session', sid: 3, wid: null, pid: null });
+  const uriGone = ref({ kind: 'session', sid: 99, wid: null, pid: null });
+
+  const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri3, uriGone], confirm: 'namilab' });
+  assert.equal(result.removed, false);
+  assert.equal(result.remote.length, 2);
+  assert.equal(result.remote[0].ok, true);
+  assert.equal(result.remote[1].ok, false);
+  assert.equal(result.remote[1].code, CODES.TARGET_GONE);
+  assert.equal(Object.hasOwn(result.remote[1], 'label'), false);
+  assert.deepEqual(registry.removedHosts(), []);
+  assert.equal((await registry.resourceList({ all: true })).length, 0, 'no local purge on a failed remote removal');
 });

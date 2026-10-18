@@ -13,6 +13,7 @@ const ALL_TOOLS = [
   'tmux_xc_references',
   'tmux_xc_capture',
   'tmux_xc_adopt',
+  'tmux_xc_alias',
   'tmux_xc_create',
   'tmux_xc_send',
   'tmux_xc_detach',
@@ -76,13 +77,13 @@ test('registers exactly the DESIGN §8 tool surface', () => {
   assert.deepEqual(registered.map((d) => d.name).sort(), [...ALL_TOOLS].sort());
 });
 
-test('create/send/detach ask when config says ask, naming the policy key', async () => {
+test('switch ON (default) asks all four actions and names the policy key', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { create: 'ask', send: 'ask', detach: 'ask' } });
+  registerTools(ctx, fakeService(), {});
   const listener = preExecute(listeners);
-  for (const name of ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_detach']) {
+  for (const name of ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_kill', 'tmux_xc_detach']) {
     const decision = await listener(exec(name), allow);
-    assert.equal(decision.kind, 'ask', `${name} should ask`);
+    assert.equal(decision.kind, 'ask', `${name} should ask when the switch is on`);
     assert.ok(decision.displayReason.en.includes('approve this'), decision.displayReason.en);
     assert.ok(decision.displayReason.en.includes('审批'), decision.displayReason.en);
     assert.ok(decision.displayReason.zh.includes('批准此操作'), decision.displayReason.zh);
@@ -92,65 +93,70 @@ test('create/send/detach ask when config says ask, naming the policy key', async
   assert.ok(send.displayReason.zh.includes('“send”'), send.displayReason.zh);
 });
 
-test('kill always asks, even when config would allow others', async () => {
+test('switch precedence: panel enabled wins over config enabled and legacy per-key allow', async () => {
+  let stored = { approval: { enabled: false } };
+  const registry = { getSettings: async () => ({ approval: { ...stored.approval } }) };
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { create: 'allow', send: 'allow', detach: 'allow' } });
+  registerTools(ctx, fakeService(registry), { approval: { enabled: true, create: 'allow' } });
   const listener = preExecute(listeners);
-  const decision = await listener(exec('tmux_xc_kill'), allow);
-  assert.equal(decision.kind, 'ask');
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow', 'panel OFF beats config ON');
+  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'allow', 'kill follows the panel OFF switch');
+
+  stored = { approval: { enabled: true } };
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'ask', 'panel ON beats legacy allow');
+  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'ask', 'panel ON asks kill');
+
+  stored = { approval: { enabled: null } };
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow', 'cleared panel falls back to config legacy allow');
+  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'ask', 'cleared panel falls back to config ON for kill');
+
+  stored = {};
+  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask', 'no panel override, no legacy key -> ask');
 });
 
-test('create/send/detach allow when config says allow', async () => {
+test('legacy per-key allow is honoured only for that key when the switch is on', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { create: 'allow', send: 'allow', detach: 'allow' } });
-  const listener = preExecute(listeners);
-  for (const name of ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_detach']) {
-    const decision = await listener(exec(name), allow);
-    assert.equal(decision.kind, 'allow', `${name} should be allowed by config`);
-  }
-});
-
-test('built-in defaults are allow/allow/ask when nothing is configured', async () => {
-  const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), {});
+  registerTools(ctx, fakeService(), { approval: { enabled: true, create: 'allow', send: 'allow' } });
   const listener = preExecute(listeners);
   assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'allow');
   assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'allow');
-  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask');
+  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask', 'detach has no legacy key');
+  assert.equal((await listener(exec('tmux_xc_kill'), allow)).kind, 'ask', 'kill has no legacy key');
 });
 
-test('panel override wins over config, and null clears back to config', async () => {
-  let stored = { approval: { send: 'ask' } };
-  const registry = {
-    getSettings: async () => ({ approval: { ...stored.approval } }),
-  };
+test('legacy per-key ask is ignored (deprecated); the switch is authoritative', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(registry), { approval: { send: 'allow', create: 'ask' } });
+  registerTools(ctx, fakeService(), { approval: { enabled: true, create: 'ask' } });
   const listener = preExecute(listeners);
-  assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'ask', 'panel ask beats config allow');
-
-  stored = { approval: { send: null } };
-  assert.equal((await listener(exec('tmux_xc_send'), allow)).kind, 'allow', 'cleared panel override falls back to config');
-  stored = { approval: {} };
-  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'ask', 'no panel override falls back to config ask');
-  assert.equal((await listener(exec('tmux_xc_detach'), allow)).kind, 'ask', 'detach uses the built-in default');
+  assert.equal((await listener(exec('tmux_xc_create'), allow)).kind, 'ask');
 });
 
-test('kill always asks and the ask reason names the fixed policy', async () => {
+test('switch OFF allows all four actions', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { create: 'allow', send: 'allow', detach: 'allow' } });
+  registerTools(ctx, fakeService(), { approval: { enabled: false } });
+  const listener = preExecute(listeners);
+  for (const name of ['tmux_xc_create', 'tmux_xc_send', 'tmux_xc_kill', 'tmux_xc_detach']) {
+    const decision = await listener(exec(name), allow);
+    assert.equal(decision.kind, 'allow', `${name} should be allowed by config OFF`);
+  }
+});
+
+test('ask reason says approval can be turned off in the panel 审批 switch', async () => {
+  const { ctx, listeners } = fakeCtx();
+  registerTools(ctx, fakeService(), {});
   const listener = preExecute(listeners);
   const decision = await listener(exec('tmux_xc_kill'), allow);
   assert.equal(decision.kind, 'ask');
   assert.ok(decision.displayReason.en.includes('"kill"'), decision.displayReason.en);
-  assert.ok(decision.displayReason.en.includes('cannot be changed'), decision.displayReason.en);
+  assert.ok(decision.displayReason.en.includes('审批 switch'), decision.displayReason.en);
+  assert.ok(decision.displayReason.zh.includes('审批'), decision.displayReason.zh);
 });
 
 test('never-ask tools are allowed', async () => {
   const { ctx, listeners } = fakeCtx();
-  registerTools(ctx, fakeService(), { approval: { create: 'ask', send: 'ask', detach: 'ask' } });
+  registerTools(ctx, fakeService(), {});
   const listener = preExecute(listeners);
-  for (const name of ['tmux_xc_list', 'tmux_xc_inspect', 'tmux_xc_resolve', 'tmux_xc_references', 'tmux_xc_capture', 'tmux_xc_adopt', 'tmux_xc_forget']) {
+  for (const name of ['tmux_xc_list', 'tmux_xc_inspect', 'tmux_xc_resolve', 'tmux_xc_references', 'tmux_xc_capture', 'tmux_xc_adopt', 'tmux_xc_alias', 'tmux_xc_forget']) {
     const decision = await listener(exec(name), allow);
     assert.equal(decision.kind, 'allow', `${name} should never ask`);
   }

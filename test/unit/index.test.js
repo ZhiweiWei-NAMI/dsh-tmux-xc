@@ -43,10 +43,36 @@ test('Config makes ssh optional and skips alias validation only for local hosts'
   assert.ok(Config['~standard'].validate({ hosts: [{ id: 'local', ssh: 'localhost', transport: 'other' }] }).issues);
 });
 
-test('Config defaults approval to allow/allow/ask and send.enterDelayMs to 400', () => {
+test('Config defaults approval to a single enabled switch and send.enterDelayMs to 400', () => {
   const parsed = config({ hosts: [{ id: 'local', transport: 'local' }] });
-  assert.deepEqual(parsed.approval, { create: 'allow', send: 'allow', detach: 'ask' });
+  assert.deepEqual(parsed.approval, { enabled: true });
   assert.deepEqual(parsed.send, { enterDelayMs: 400 });
+});
+
+test('Config approval switch accepts explicit enabled and leaves deprecated keys unset by default', () => {
+  const parsed = config({ hosts: [{ id: 'local', transport: 'local' }], approval: { enabled: false } });
+  assert.deepEqual(parsed.approval, { enabled: false });
+  // The deprecated per-key fields must not be injected with defaults, so
+  // "unset" stays distinguishable from an explicit legacy 'allow'.
+  assert.equal(Object.hasOwn(parsed.approval, 'create'), false);
+  assert.equal(Object.hasOwn(parsed.approval, 'send'), false);
+  assert.equal(Object.hasOwn(parsed.approval, 'detach'), false);
+  const legacy = config({ approval: { create: 'allow' } }).approval;
+  assert.deepEqual(legacy, { enabled: true, create: 'allow' });
+  for (const bad of [{ enabled: 'yes' }, { create: 'maybe' }, { kill: 'allow' }]) {
+    assert.ok(Config['~standard'].validate({ approval: bad }).issues, JSON.stringify(bad));
+  }
+});
+
+test('Config accepts host alias display hints and defaults them to an empty list', () => {
+  const host = {
+    id: 'local', transport: 'local',
+    aliases: [{ session: 'train', window: 'shell', alias: 'main' }, { session: 'logs', alias: 'logs' }],
+  };
+  const parsed = config({ hosts: [host] }).hosts[0];
+  assert.deepEqual(parsed.aliases, host.aliases);
+  assert.deepEqual(config({ hosts: [{ id: 'local', transport: 'local' }] }).hosts[0].aliases, []);
+  assert.ok(Config['~standard'].validate({ hosts: [{ id: 'local', transport: 'local', aliases: [{ window: 'x', alias: 'y' }] }] }).issues, 'session is required');
 });
 
 test('send.enterDelayMs is clamped to 0..5000', () => {
@@ -183,7 +209,7 @@ test('apply registers routes when connection appears later and returns scoped cl
   });
   await apply(ctx, config({ registry: 'memory', hosts: [{ id: 'local', transport: 'local' }] }));
   assert.deepEqual(inject, ['tools', 'storageDomain']);
-  assert.equal(tools.size, 11, 'agent tools work without connection');
+  assert.equal(tools.size, 12, 'agent tools work without connection');
   assert.ok(!warnings.some((message) => /connection|workingDirectory/.test(message)));
   assert.equal(injections.length, 1);
   const injection = injections[0];
@@ -195,7 +221,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     const dispose = injection.callback(scope.ctx);
     assert.equal(typeof dispose, 'function');
     activeScopes.add(dispose);
-    assert.equal(scope.routes.size, 7);
+    assert.equal(scope.routes.size, 12);
     const route = scope.routes.get('/api/tmux-xc/hosts');
     const response = await route.fetch(new Request('http://localhost/api/tmux-xc/hosts'));
     assert.equal(response.status, 200);
@@ -203,11 +229,16 @@ test('apply registers routes when connection appears later and returns scoped cl
       ok: true, hosts: [{ id: 'local', label: 'local', transport: 'local', sockets: [{ id: 'default' }] }],
     });
     assert.ok(scope.routes.has('/api/tmux-xc/inventory'));
+    assert.ok(scope.routes.has('/api/tmux-xc/version'));
+    assert.ok(scope.routes.has('/api/tmux-xc/capture'));
+    assert.ok(scope.routes.has('/api/tmux-xc/kill'));
+    assert.ok(scope.routes.has('/api/tmux-xc/host/remove-plan'));
+    assert.ok(scope.routes.has('/api/tmux-xc/host/remove'));
     await dispose(); // Cordis disposes the callback result when connection goes away.
     activeScopes.delete(dispose);
     assert.equal(scope.routes.size, 0);
-    assert.equal(scope.removed.length, 7);
-    assert.equal(tools.size, 11, 'connection loss must not dispose tools');
+    assert.equal(scope.removed.length, 12);
+    assert.equal(tools.size, 12, 'connection loss must not dispose tools');
   }
 
   // Official dsh-session-reference uses this same event without an agents API.
