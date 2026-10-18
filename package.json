@@ -1,7 +1,7 @@
 {
   "name": "dsh-tmux-xc",
   "version": "0.1.1",
-  "description": "DeepSeek Harness plugin: cross-conversation remote tmux over SSH — host→session→window→pane panel, composer references, and approval-gated agent tools",
+  "description": "Manage remote tmux tasks across DeepSeek Harness conversations: exact-pane references, read-only snapshots, and approval-controlled agent actions.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -25,13 +25,20 @@
     "type": "git",
     "url": "git+https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc.git"
   },
+  "homepage": "https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc#readme",
+  "bugs": {
+    "url": "https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh",
     "dsh-plugin",
     "tmux",
     "ssh",
-    "remote"
+    "remote",
+    "cross-conversation",
+    "agent-tools",
+    "terminal-snapshot"
   ],
   "dsh": {
     "bundle": {

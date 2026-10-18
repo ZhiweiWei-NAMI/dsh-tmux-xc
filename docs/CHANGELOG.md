@@ -2,11 +2,17 @@
 
 All notable changes to **dsh-tmux-xc**. Versions follow the plugin's `package.json`. UI strings are Chinese-first with an English table; this file is English.
 
-## 0.1.1
+## 0.1.1 — 2026-10-18
 
-**Accepted candidate: commit `c600ece` (`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`), tarball SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07`.** Version 0.1.1 alone does not identify this artifact: an earlier 0.1.1 build at `1ee6f78` failed submission and sent-history navigation and was not accepted. The 0.1.1 fixes below were verified by independent SOL clicks and accepted by ASTRA within the scope recorded in [TEST-RESULTS.md](TEST-RESULTS.md). No release or publication is claimed here, and these notes do not certify any later change.
+Released to [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag **`v0.1.1`**.
 
-Task-centric panel, local aliases, one approval switch, honest send reporting, panel-side deletion and chip navigation. No remote tmux objects are renamed, no tmux server is ever killed, and no remote files are touched.
+**Runtime unchanged:** `lib/` is identical to the independently accepted baseline **`c600ece`** (`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`). The release commit changes presentation only: READMEs, screenshots, documentation, and package discovery metadata. Independent SOL hands-on checks and ASTRA evidence/source review establish the scope recorded in [TEST-RESULTS.md](TEST-RESULTS.md).
+
+**Artifact identity:** SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07` identifies the accepted **pre-marketing tarball**, not the published artifact. For the published tarball digest, use npm's **`dist.shasum`** in the [version registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1), also recorded on the GitHub release. Documentation changes mean the two tarballs are not interchangeable.
+
+An earlier 0.1.1 candidate at `1ee6f78` failed submission and sent-history navigation; it was not accepted. The fixes below belong to the accepted runtime, not a claim that every earlier 0.1.1 build passed.
+
+Task-centric panel, local aliases, one approval switch, honest send reporting, panel-side deletion and chip navigation. Aliases never rename remote tmux objects; destructive controls issue scoped pane/window/session kills, not server-wide kill or file-removal commands.
 
 ### Added
 
@@ -15,10 +21,10 @@ Task-centric panel, local aliases, one approval switch, honest send reporting, p
 - **Local aliases.** Panel action **别名** and agent tool **`tmux_xc_alias { ref, alias|null }`**. Aliases are local metadata only: they never rename the remote tmux object and need no approval. Setting an alias **adopts/registers the target first** if needed. Sanitized to 1..40 characters, no `[ ] ( )`, no control/bidi characters.
 - **Config display hints** `hosts[].aliases: [{ session, window?, alias }]`: display-only names matched by remote session name (and optional window name). A local alias for the exact target wins. They live in the config, so they survive tmux restarts; identity is never derived from them.
 - **Copy attach** offers **Bash (Linux/macOS/Git Bash)** and **PowerShell (Windows)** forms, both with `ssh -t -o ClearAllForwardings=yes` and the exact socket + `$`/`@`/`%` target. `cmd.exe` is not supported. For `transport: local`, the Bash form is the local tmux command only.
-- **Panel deletion.** **删除窗格 / 删除窗口 / 删除会话** opens a click-confirmed dialog that lists the exact scope (label, alias, host, socket, kind) and what dies (processes; no files; other objects unaffected). It kills only that object — never the tmux server, never files.
+- **Panel deletion.** **删除窗格 / 删除窗口 / 删除会话** opens a click-confirmed dialog listing the exact scope (label, alias, host, socket, kind) and affected processes. It issues only the selected object's native tmux kill command, never `kill-server` or file removal. Native containment/linking semantics apply; deleting the last object can naturally stop the server.
 - **Host removal.** **移除主机…** offers two explicit choices:
   - **仅从插件移除 (plugin-only):** purges the host's registrations and aliases and hides it; the remote tmux is untouched. Restore in **高级详情 → 已移除的主机**; the purged registrations/aliases are **not** restored.
-  - **先终止所选远端会话，再移除主机:** terminates only the selected **sessions** (never the tmux server) and removes the host only when **every** selected kill succeeded; per-session results are shown honestly, and an unreachable host offers plugin-only removal. The profile config file is never edited; delete the host block there to remove it permanently.
+  - **先终止所选远端会话，再移除主机:** issues native kills only for the selected **sessions** (never `kill-server`) and removes the host only when **every** selected kill succeeded; per-session results are shown honestly, and an unreachable host offers plugin-only removal. Both modes require typing the host ID. The profile config file is never edited; delete the host block there to remove it permanently.
 - **One approval switch**: **插件审批 开/关** in the panel, default **ON**. ON = create / send / delete(kill) / detach ask; OFF = they run without plugin approval on configured, non-removed hosts. Precedence: panel setting > config `approval.enabled` (boolean) > deprecated 0.1.0 per-key `approval.create|send|detach: 'allow'` > ON. Read at call time (no restart). DSH host permission rules and SSH authentication failures still apply.
 - **Reliable send.** Text/keys and `Enter` are separate guarded steps with `send.enterDelayMs` (default 400, clamp 0..5000). Results gain `delivered { text, keys, enter }` (enter may be `'unknown'`) and `submission { checked, state: 'cleared'|'pending'|'unknown' }` from a post-Enter cursor-line probe. Partial delivery is reported exactly, and mutations are never replayed.
 - **One-click navigation.** Clicking a tmux chip in a conversation opens the tmux panel, re-resolves the exact identity, selects/highlights the target and shows a **read-only snapshot** ("只读快照，不是交互终端"). Stale references show an honest message (`SERVER_RESTARTED` / `TARGET_GONE` / `HOST_UNREACHABLE`) and are never retargeted.
@@ -46,9 +52,9 @@ Task-centric panel, local aliases, one approval switch, honest send reporting, p
 
 ### Migration 0.1.0 → 0.1.1
 
-1. Upgrade with `dsh plugin --profile <profile> remove dsh-tmux-xc`, then `dsh plugin --profile <profile> add <0.1.1 tarball>` (or bump `version` before packing). pnpm keeps an unchanged version+path otherwise.
+1. Upgrade with `dsh plugin --profile <profile> remove dsh-tmux-xc`, then `dsh plugin --profile <profile> add dsh-tmux-xc@0.1.1`. Remove/add also avoids pnpm retaining old files when reinstalling an unchanged version+path.
 2. **Restart DSH** (host code is not hot-reloaded) and reload the page.
-3. Decide the approval default: set `approval.enabled: true|false` and **remove the old per-key `approval.create/send/detach`** so a legacy `allow` cannot silently survive when neither the panel nor `approval.enabled` is set. The panel shows a “旧版每键配置仍生效” note while legacy keys are active.
+3. Decide the approval default: set `approval.enabled: true|false` and **remove the old per-key `approval.create/send/detach`** so a legacy `allow` cannot silently survive when neither the panel nor `approval.enabled` is set. The panel may show a “旧版每键配置仍生效” legacy-key note while those keys remain configured; the precedence above determines whether they actually apply.
 4. Registry data (adopted/created entries, aliases, settings, conversation references) is readable as-is; no manual data migration is needed.
 5. Expect the UI renames: 忘记 → 取消登记, no workspace toggle, delete/host-remove dialogs, alias editor, approval switch, font controls.
 

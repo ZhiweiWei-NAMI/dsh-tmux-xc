@@ -2,7 +2,7 @@
 
 ## Summary — accepted with scoped qualifications
 
-> **Accepted with scoped qualifications: tmux-xc 0.1.1, commit `c600ece`.** Independent SOL clicks verified the fixes; ASTRA checked the evidence and diff. Decision and evidence: `.work/review/ASTRA-ACCEPTANCE.md` (not shipped in this repository).
+> **0.1.1 released 2026-10-18 to [npm](https://www.npmjs.com/package/dsh-tmux-xc) and [GitHub](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1), tag `v0.1.1`.** Runtime `lib/` is identical to the independently accepted baseline `c600ece`. Independent SOL clicks verified the fixes; ASTRA checked the evidence and diff. Acceptance remains scoped to the observations below.
 >
 > - The unified task tree exposes child task names, including the developer task. Plugin-created targets register automatically; other targets need adoption for registration.
 > - Copy commands target the selected resource. SSH aliases/config must exist on your connecting machine; local Bash runs on the tmux machine. Local PowerShell is disabled; Windows remains unverified.
@@ -11,11 +11,17 @@
 > - One-shot shell execution and real Claude prompt submission passed. Delivery or `cleared` does not prove execution or a successful model response.
 > - Sent references open the exact target's read-only snapshot; tested stale/restarted references fail without retargeting.
 >
-> Documentation corrections remain. Reviewer model/effort routing was configured, but runtime attestation is unavailable. No publication or production update is authorized.
+> Reviewer model/effort routing was configured, but runtime attestation is unavailable. Publication does not broaden the evaluated platform or feature scope.
 
-## Current acceptance — 0.1.1 at `c600ece`
+## Release artifact and accepted runtime
 
-**Candidate.** `dsh-tmux-xc` **0.1.1**, branch `v011-int`, commit **`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`** = `1ee6f78` + lane A `802b872` + lane B `b55b75d`. Packed artifact `dist/dsh-tmux-xc-0.1.1.tgz`, SHA-1 **`b39fe0019ebffd6aeb49a78b7f86362bf72dea07`**. The manager installed and restarted the package; independent SOL verified all **15 installed `lib` files** against `git show c600ece:lib/...` byte-for-byte, so "0.1.1" alone does not identify the fixed artifact — the commit and digest do.
+The release commit changes **presentation only**: READMEs, screenshots, documentation, and package discovery metadata. It does not change `lib/`. No tests were rerun for this release-writing pass; the runtime evidence below is retained, not presented as a new campaign. The README screenshots were captured separately by the manager from the installed isolated candidate with disposable demo tasks; they illustrate the UI, not additional independent acceptance tests.
+
+**Accepted baseline.** `dsh-tmux-xc` **0.1.1**, branch `v011-int`, commit **`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`** = `1ee6f78` + lane A `802b872` + lane B `b55b75d`. The manager installed and restarted the pre-marketing package; independent SOL verified all **15 installed `lib` files** against `git show c600ece:lib/...` byte-for-byte.
+
+**Do not confuse the artifacts.** SHA-1 **`b39fe0019ebffd6aeb49a78b7f86362bf72dea07`** identifies the accepted **pre-marketing tarball**, **not** the published tarball. The published package includes updated documentation. Its digest is npm's **`dist.shasum`** in the [0.1.1 registry record](https://registry.npmjs.org/dsh-tmux-xc/0.1.1), also recorded on the [GitHub release](https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc/releases/tag/v0.1.1). Version alone does not identify the evaluated artifact.
+
+## Runtime acceptance — 0.1.1 at `c600ece`
 
 **Environment.** Isolated installed profile `xcweb` (`test-infra/dsh-home`), loopback web port 3190; DSH **0.2.1-rc.2**, tmux **3.0a**, Chromium **156.0.8078.4**, viewport 1500×950. Disposable `xc-e2e` / `xc-local` and reviewer-owned sockets; no live AC, AeroWorld or developer target, no user credentials, no production DSH configuration. This is not an exhaustive OS process audit.
 
@@ -25,9 +31,9 @@
 
 | Evidence | What it establishes | Scope |
 |---|---|---|
-| Independent SOL recheck, `c600ece` (report **SOL-RECHECK.md**, actions `sol-recheck-actions.jsonl`, traces, command/PID evidence) | Actual browser clicks and functional checks on the fixed candidate: one-shot submission, sent-history/stale navigation, changed UI, approval OFF, independent DSH host deny | 15 installed files matched; driver timeouts and the attempt sent before asynchronous chip insertion are not counted as passes |
-| Independent ASTRA acceptance, `c600ece` (**ASTRA-ACCEPTANCE.md**) | Evidence/source judgment on all nine requirements; no remaining functional blocker; documentation corrections required | Read-only review; ran no tests, browser or tmux |
-| Reused independent SOL click evidence, `1ee6f78` (**SOL-EVAL.md**, tarball SHA-1 `3762dc52a9666b753eff282018c80aeed12ec407`) | Baseline task tree, copy/clipboard, deletion/unregister, unified inventory, registration, approval ON/OFF/persistence, font size — and the two original blockers | Reused as delta baseline, not re-run on `c600ece` |
+| Independent SOL recheck, `c600ece` (retained private report, action logs, traces, command/PID evidence) | Actual browser clicks and functional checks on the fixed candidate: one-shot submission, sent-history/stale navigation, changed UI, approval OFF, independent DSH host deny | 15 installed files matched; driver timeouts and the attempt sent before asynchronous chip insertion are not counted as passes |
+| Independent ASTRA acceptance, `c600ece` | Evidence/source judgment on all nine requirements; no remaining functional blocker; documentation corrections subsequently applied | Read-only review; ran no tests, browser or tmux |
+| Reused independent SOL click evidence, `1ee6f78` (tarball SHA-1 `3762dc52a9666b753eff282018c80aeed12ec407`) | Baseline task tree, copy/clipboard, deletion/unregister, unified inventory, registration, approval ON/OFF/persistence, font size — and the two original blockers | Reused as delta baseline, not re-run on `c600ece` |
 | Manager automated runs | Unit **555 / 555** and real-SSH/tmux integration **34 / 34** reported for the fixed tree, plus a direct-service `%17` probe | Manager-reported, supplemental; **not** independent SOL clicks, not rerun by ASTRA |
 | Manager GUI runs (historical `1ee6f78`, 549/549 and 33/33) | Earlier manager-observed behaviour, including GUI acceptance | Historical; rows 8/9 below were contradicted as final acceptance |
 
@@ -51,7 +57,7 @@ Earlier automated totals for `1ee6f78` were 549/549 unit and 33/33 integration; 
 
 **Cleanup and residual metadata.** Reviewer-created sessions were deleted through the UI or explicit isolated-socket cleanup, and the temporary policy and profile edits were restored byte-for-byte. Afterwards, clearing a deleted session's alias through the ordinary API returned `409 TARGET_GONE`, so the historical evaluator alias "SOL Recheck Shell Task" may remain in alias storage; no corresponding tmux process or registered target remains. This is disclosed cleanup metadata, not a functional defect. No live fixture pane IDs/PIDs changed; that is tmux-scope evidence, not a global subprocess audit.
 
-**What this section does not claim.** It is not publication or release authorization, does not certify Windows/macOS or every CLI, and does not re-test any implementation change made after `c600ece` — a later change is a new candidate requiring its own proportional review.
+**Coverage boundary.** Release authorization is separate from runtime acceptance. This evidence does not certify Windows/macOS or every CLI, and does not cover later implementation changes. This release retains the accepted `lib/` bytes; any future runtime change needs its own proportional review. The underlying independent review records are retained privately, not shipped in the repository or npm package.
 
 ---
 
@@ -79,8 +85,8 @@ This was the manager's own run on `1ee6f784642f072d8e6f10df4daec0acea424ce0` (ta
 | 5 | Registration & visibility | Agent `tmux_xc_adopt` in another chat → the open panel showed the `已采纳` badge 7.3 s after the turn started (version polling, no manual refresh). Plugin create registers in code (badge `已创建`); aliasing registers. |
 | 6 | Approval switch | Default ON (source 默认): agent create → native approval card. Switched OFF in the panel → persisted after page reload (source 面板设置) → agent create ran with no card. Restored ON. Unit: precedence panel > explicit config > legacy per-key > ON; kill follows the switch; approval snapshot enforced even if the switch flips mid-card; DSH asks preserved. |
 | 7 | Font size | A+ ×3 → 15 px; after page reload still 15 px; A− back to 12 px. |
-| 8 | Send / submit | **Historical manager observation — contradicted as final acceptance on `1ee6f78`.** The manager reported that a long text + Enter submitted with the plugin's guarded two-step send (`submission.state: cleared`) at 400 ms and at 0 ms. Independent SOL clicks on the same commit observed typed-but-unsubmitted text and `OUTCOME_UNKNOWN` on a shell, a Python REPL and real Claude Code 2.1.302 (SOL-EVAL.md §8). The cause of the discrepancy is **not proven**; the earlier claim is retained as history only. Fixed in `c600ece` (literal-percent acknowledgement repair) and rechecked — see the current section. |
-| 9 | One-click navigation | **Historical manager observation — contradicted as final acceptance on `1ee6f78`.** The manager reported that a sent-message tmux chip selected the exact `ac-demo` pane and showed a read-only snapshot, and that a restarted look-alike `%0` produced `引用已失效：tmux 服务已重启`. Independent SOL clicks on the same commit instead got a built-in file chip pointing at a nonexistent file (SOL-EVAL.md §9). Whether the manager's run depended on live page state is a hypothesis, not a proven reconstruction; the earlier claim is retained as history only. Fixed in `c600ece` (sent-user-text precedence) and rechecked — see the current section. |
+| 8 | Send / submit | **Historical manager observation — contradicted as final acceptance on `1ee6f78`.** The manager reported that a long text + Enter submitted with the plugin's guarded two-step send (`submission.state: cleared`) at 400 ms and at 0 ms. Independent SOL clicks on the same commit observed typed-but-unsubmitted text and `OUTCOME_UNKNOWN` on a shell, a Python REPL and real Claude Code 2.1.302 (first independent SOL evaluation, submission section). The cause of the discrepancy is **not proven**; the earlier claim is retained as history only. Fixed in `c600ece` (literal-percent acknowledgement repair) and rechecked — see the current section. |
+| 9 | One-click navigation | **Historical manager observation — contradicted as final acceptance on `1ee6f78`.** The manager reported that a sent-message tmux chip selected the exact `ac-demo` pane and showed a read-only snapshot, and that a restarted look-alike `%0` produced `引用已失效：tmux 服务已重启`. Independent SOL clicks on the same commit instead got a built-in file chip pointing at a nonexistent file (first independent SOL evaluation, navigation section). Whether the manager's run depended on live page state is a hypothesis, not a proven reconstruction; the earlier claim is retained as history only. Fixed in `c600ece` (sent-user-text precedence) and rechecked — see the current section. |
 
 Not verified in that run: Windows DSH desktop and Windows PowerShell 5.1/OpenSSH (user); the real `NaMILab` alias from Windows; tmux other than 3.0a; DSH other than 0.2.1-rc.2; hot reload (not supported).
 
