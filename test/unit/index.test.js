@@ -51,7 +51,7 @@ function fakeCtx() {
   const warnings = [];
   const ctx = {
     logger: () => ({ warn: (message) => warnings.push(message) }),
-    // No storage facility: intentionally exercise the documented memory fallback.
+    // No storage facility: the apply test explicitly opts into memory mode.
     tools: {
       register(definition) {
         tools.set(definition.name, definition);
@@ -126,10 +126,9 @@ test('apply registers routes when connection appears later and returns scoped cl
   const activeScopes = new Set();
   t.after(async () => {
     for (const dispose of activeScopes) await dispose();
-    await listeners.get('dispose')?.listener();
     for (const dispose of effects.reverse()) await dispose();
   });
-  await apply(ctx, config({ hosts: [{ id: 'local', transport: 'local' }] }));
+  await apply(ctx, config({ registry: 'memory', hosts: [{ id: 'local', transport: 'local' }] }));
   assert.deepEqual(inject, ['tools', 'storageDomain']);
   assert.equal(tools.size, 11, 'agent tools work without connection');
   assert.ok(!warnings.some((message) => /connection|workingDirectory/.test(message)));
@@ -148,7 +147,7 @@ test('apply registers routes when connection appears later and returns scoped cl
     const response = await route.fetch(new Request('http://localhost/api/tmux-xc/hosts'));
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
-      ok: true, hosts: [{ id: 'local', label: 'local', sockets: [{ id: 'default' }] }],
+      ok: true, hosts: [{ id: 'local', label: 'local', transport: 'local', sockets: [{ id: 'default' }] }],
     });
     assert.ok(scope.routes.has('/api/tmux-xc/inventory'));
     await dispose(); // Cordis disposes the callback result when connection goes away.

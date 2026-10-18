@@ -8,6 +8,8 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import process from 'node:process'
+import { lstatSync, unlinkSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 
 export const DEFAULT_SSH_CONFIG = new URL('../../test-infra/sshd/ssh_config', import.meta.url).pathname
 export const sshConfigFile = process.env.XC_SSH_CONFIG || DEFAULT_SSH_CONFIG
@@ -100,7 +102,7 @@ export async function makeService({ socketName, hosts, registry, transport, conf
 
 /**
  * Per-test setup: skip the test when infra is missing, otherwise return a fresh socket and a
- * service factory. `t.after` kills only that socket's server.
+ * service factory. `t.after` kills only that server and unlinks its disposable socket.
  */
 export function suiteContext(t) {
   const infra = checkInfra()
@@ -143,10 +145,24 @@ export function hasServer(socketName) {
   return spawnSync('tmux', ['-L', socketName, 'list-sessions'], { encoding: 'utf8', timeout: 15000 }).status === 0
 }
 
-/** Kill only the isolated test server; never throws (safe from t.after). */
+/** Kill the isolated server AND unlink its leftover socket; never follow symlinks. */
 export function killTestServer(socketName) {
   assertTestSocket(socketName)
-  spawnSync('tmux', ['-L', socketName, 'kill-server'], { encoding: 'utf8', timeout: 15000 })
+  const directory = resolve(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid()}`)
+  const socketPath = resolve(directory, socketName)
+  assert.equal(dirname(socketPath), directory, 'cleanup must remain in the tmux uid directory')
+  assert.equal(basename(socketPath), socketName, 'cleanup must address exactly this test socket')
+  const killed = spawnSync('tmux', ['-L', socketName, 'kill-server'], { encoding: 'utf8', timeout: 15000 })
+  if (killed.error) throw killed.error
+  if (killed.status !== 0 && hasServer(socketName)) {
+    throw new Error(`could not stop test server ${socketName}: ${killed.stderr}`)
+  }
+  try {
+    assert.ok(lstatSync(socketPath).isSocket(), `refusing to unlink non-socket ${socketPath}`)
+    unlinkSync(socketPath)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
 }
 
 /** Poll `fn` until it returns a truthy value or `timeoutMs` elapses. */

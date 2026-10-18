@@ -408,6 +408,76 @@ test('runRemote does not retry after begin was seen', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('RV1-09: incomplete dispatched mutations outrank disconnect and partial err records', async () => {
+  for (const stdout of [
+    '', rec(['begin']), rec(['begin']) + rec(['ok']),
+    rec(['begin']) + rec(['err', CODES.TARGET_GONE, 'unfinished refusal']),
+  ]) {
+    for (const stderr of ['Connection closed by host\n', 'kex_exchange_identification: read: Connection reset by peer\n']) {
+      const { spawnImpl, calls } = fakeSpawn([fail({ code: 255, stdout, stderr })]);
+      await assert.rejects(runRemote({
+        cfg: CFG, alias: ALIAS, script: 'mutation', nonce: NONCE, mutating: true, spawnImpl,
+      }), (error) => {
+        assert.equal(error.code, CODES.OUTCOME_UNKNOWN);
+        assert.match(error.message, /verify with capture before retrying/);
+        return true;
+      });
+      assert.equal(calls.length, 1);
+    }
+  }
+});
+
+test('definitive pre-execution auth, host-key and connect failures retain their codes', async () => {
+  for (const [stderr, code] of [
+    ['Permission denied (publickey).\n', CODES.SSH_AUTH],
+    ['Host key verification failed.\n', CODES.SSH_HOSTKEY],
+    ['ssh: connect to host x port 22: Connection refused\n', CODES.HOST_UNREACHABLE],
+  ]) {
+    for (const began of [false, true]) {
+      const { spawnImpl, calls } = fakeSpawn([fail({ code: 255, stdout: began ? rec(['begin']) : '', stderr })]);
+      await expectCode(runRemote({
+        cfg: CFG, alias: ALIAS, script: 'mutation', nonce: NONCE, mutating: true, spawnImpl,
+      }), began ? CODES.OUTCOME_UNKNOWN : code);
+      assert.equal(calls.length, 1);
+    }
+  }
+});
+
+test('runtime process errors after dispatch are uncertain mutations, not startup failures', async () => {
+  const { spawnImpl } = fakeSpawn([{
+    onWrite: (child) => child.finish({ error: Object.assign(new Error('runtime failure'), { code: 'EIO' }) }),
+  }]);
+  await expectCode(runRemote({
+    cfg: CFG, alias: ALIAS, script: 'mutation', nonce: NONCE, mutating: true, spawnImpl,
+  }), CODES.OUTCOME_UNKNOWN);
+});
+
+test('cancellation settles stdout/stderr collectors before rejecting', async () => {
+  const controller = new AbortController();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let finish;
+  const done = new Promise((resolve) => { finish = resolve; });
+  const spawnImpl = () => ({
+    stdout, stderr, done,
+    stdinWrite() { controller.abort(); },
+    kill() { finish({ code: null, signal: 'SIGTERM' }); },
+  });
+  let settled = false;
+  const result = runRemote({
+    cfg: CFG, alias: ALIAS, script: 'x', nonce: NONCE, signal: controller.signal, spawnImpl,
+  }).finally(() => { settled = true; });
+  // Attach the rejection assertion immediately, so this never creates an
+  // unhandled rejection while the deliberately delayed streams are open.
+  const rejection = expectCode(result, CODES.CANCELLED);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  stdout.end();
+  stderr.end();
+  await rejection;
+  assert.equal(settled, true);
+});
+
 test('missing end record → PROTOCOL for read-only, OUTCOME_UNKNOWN for mutating', async () => {
   const stdout = rec(['begin']) + rec(['ok', '$3']);
   const readOnly = fakeSpawn([succeed(stdout)]);
@@ -450,7 +520,11 @@ test('missing begin record → PROTOCOL for read-only, OUTCOME_UNKNOWN for mutat
 });
 
 test('err records followed by end preserve their XcError code and message', async () => {
-  for (const code of [CODES.TARGET_GONE, CODES.REMOTE_ERROR, CODES.REMOTE_TOOL_MISSING]) {
+  for (const code of [
+    CODES.TARGET_GONE, CODES.TARGET_CHANGED, CODES.SERVER_RESTARTED, CODES.SERVER_GONE,
+    CODES.SYNCHRONIZED_PANES, CODES.PANE_IN_MODE, CODES.PANE_DEAD, CODES.PANE_INPUT_DISABLED,
+    CODES.REGISTRY_UNAVAILABLE, CODES.REMOTE_ERROR, CODES.REMOTE_TOOL_MISSING, CODES.OUTCOME_UNKNOWN,
+  ]) {
     for (const options of [{ alias: ALIAS }, { host: LOCAL_HOST }]) {
       for (const mutating of [false, true]) {
         for (const exitCode of [0, 1, 255]) {

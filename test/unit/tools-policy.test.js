@@ -45,7 +45,10 @@ function fakeCtx() {
 
 function fakeService() {
   return {
-    describeForApproval: async () => ({ en: 'approve this', zh: '批准此操作' }),
+    describeForApproval: async () => ({
+      en: 'approve this', zh: '批准此操作',
+      identity: { hostId: 'local', hostFp: 'fp', socketId: 'default', gen: 'g1', kind: 'pane', sid: 1, wid: 2, pid: 7 },
+    }),
   };
 }
 
@@ -55,8 +58,12 @@ function preExecute(listeners) {
   return entry.listener;
 }
 
+let callSequence = 0;
 function exec(name, args = {}) {
-  return { name, arguments: args, signal: undefined };
+  return {
+    callId: `policy-${++callSequence}`, name, arguments: args,
+    agent: { session: { id: 'chat' } }, signal: new AbortController().signal,
+  };
 }
 
 const allow = async () => ({ kind: 'allow' });
