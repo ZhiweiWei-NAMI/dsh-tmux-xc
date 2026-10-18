@@ -133,6 +133,23 @@ test('settings GET reports the switch, its source and legacy allow keys', async 
   });
 });
 
+test('RFA: settings source distinguishes explicit config from default and panel', async () => {
+  for (const configured of [undefined, true, false]) {
+    for (const panel of [undefined, true, false]) {
+      const config = { approval: { send: 'allow', ...(configured === undefined ? {} : { enabled: configured }) } };
+      const { request, registry } = fixture({ config });
+      if (panel !== undefined) await registry.setSettings({ approval: { enabled: panel } });
+      const response = await request('settings', undefined, 'GET');
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.approval, {
+        enabled: panel ?? configured ?? true,
+        source: panel !== undefined ? 'panel' : configured !== undefined ? 'config' : 'default',
+        legacyAllow: ['send'],
+      });
+    }
+  }
+});
+
 test('settings PUT toggles enabled and clears back to config', async () => {
   const { request } = fixture({ config: { approval: { enabled: false, create: 'allow' } } });
   assert.deepEqual(await request('settings', { approval: { enabled: true } }, 'PUT'), {
@@ -227,6 +244,10 @@ test('kill route returns killed/label and maps confirm mismatch to 400', async (
   });
   assert.equal(calls[0].uri, uri);
   assert.equal(calls[0].confirm, 'lab:named:%0');
+  for (const confirm of [undefined, null, '']) {
+    assert.equal((await request('kill', { uri, ...(confirm === undefined ? {} : { confirm }) })).status, 400);
+  }
+  assert.equal(calls.length, 1, 'panel kill still requires an echoed or typed confirm');
 
   const mismatch = fixture({ kill: async () => { throw new XcError(CODES.CONFIRM_MISMATCH, 'bad confirm'); } });
   const response = await mismatch.request('kill', { uri, confirm: 'wrong' });

@@ -43,9 +43,10 @@ test('Config makes ssh optional and skips alias validation only for local hosts'
   assert.ok(Config['~standard'].validate({ hosts: [{ id: 'local', ssh: 'localhost', transport: 'other' }] }).issues);
 });
 
-test('Config defaults approval to a single enabled switch and send.enterDelayMs to 400', () => {
+test('Config leaves approval.enabled absent and defaults send.enterDelayMs to 400', () => {
   const parsed = config({ hosts: [{ id: 'local', transport: 'local' }] });
-  assert.deepEqual(parsed.approval, { enabled: true });
+  assert.deepEqual(parsed.approval, {});
+  assert.equal(Object.hasOwn(parsed.approval, 'enabled'), false);
   assert.deepEqual(parsed.send, { enterDelayMs: 400 });
 });
 
@@ -59,7 +60,12 @@ test('Config approval switch accepts explicit enabled and leaves deprecated keys
   assert.equal(Object.hasOwn(parsed.approval, 'detach'), false);
   assert.equal(Object.hasOwn(parsed.approval, 'kill'), false);
   const legacy = config({ approval: { create: 'allow', send: 'ask', detach: 'allow' } }).approval;
-  assert.deepEqual(legacy, { enabled: true, create: 'allow', send: 'ask', detach: 'allow' });
+  assert.deepEqual(legacy, { create: 'allow', send: 'ask', detach: 'allow' });
+  assert.equal(Object.hasOwn(legacy, 'enabled'), false);
+  for (const enabled of [true, false]) {
+    const approval = { enabled, create: 'allow', send: 'allow', detach: 'allow' };
+    assert.deepEqual(config({ approval }).approval, approval, 'explicit switch survives legacy keys');
+  }
   for (const bad of [{ enabled: 'yes' }, { create: 'maybe' }, { kill: 'allow' }, { kill: 'ask' }, { kill: true }, { kill: false }]) {
     assert.ok(Config['~standard'].validate({ approval: bad }).issues, JSON.stringify(bad));
   }

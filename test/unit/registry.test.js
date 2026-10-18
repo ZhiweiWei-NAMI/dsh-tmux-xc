@@ -229,6 +229,90 @@ test('markVerified transitions live -> stale reasons and refreshes labels', asyn
   assert.equal(stored.lastVerifiedAt, at + 5);
 });
 
+test('markVerified bumps version for state, reason, labels and metadata, not timestamps', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  await registry.markVerified(HOST, 'default', inventory(), T0);
+  let version = registry.version;
+
+  assert.equal(await registry.markVerified(HOST, 'default', inventory(), T0 + 1), 1);
+  assert.equal(registry.resourceGet(paneKey).lastVerifiedAt, T0 + 1);
+  assert.equal(registry.version, version, 'identical projection only updates the timestamp');
+
+  const renamed = inventory();
+  renamed.sessions[0].windows[0].panes[1].title = 'renamed pane';
+  await registry.markVerified(HOST, 'default', renamed, T0 + 2);
+  assert.equal(registry.resourceGet(paneKey).labels.pane, 'renamed pane');
+  assert.equal(registry.version, ++version, 'label-only change invalidates inventory');
+
+  renamed.sessions[0].windows[0].panes[1].width = 80;
+  await registry.markVerified(HOST, 'default', renamed, T0 + 3);
+  assert.equal(registry.resourceGet(paneKey).meta.width, 80);
+  assert.equal(registry.version, ++version, 'metadata-only change invalidates inventory');
+  await registry.markVerified(HOST, 'default', renamed, T0 + 4);
+  assert.equal(registry.version, version);
+  assert.equal(registry.resourceGet(paneKey).lastVerifiedAt, T0 + 4);
+
+  await registry.markVerified(HOST, 'default', inventory({ server: false }), T0 + 5);
+  assert.equal(registry.resourceGet(paneKey).state, 'stale');
+  assert.equal(registry.version, ++version, 'live to stale invalidates inventory');
+  await registry.markVerified(HOST, 'default', inventory({ gen: '1-2' }), T0 + 6);
+  assert.equal(registry.resourceGet(paneKey).staleReason, 'SERVER_RESTARTED');
+  assert.equal(registry.version, ++version, 'reason-only change invalidates inventory');
+  await registry.markVerified(HOST, 'default', inventory({ gen: '1-2' }), T0 + 7);
+  assert.equal(registry.version, version, 'unchanged stale state does not invalidate inventory');
+  await registry.markVerified(HOST, 'default', renamed, T0 + 8);
+  assert.equal(registry.version, ++version, 'recovery invalidates inventory');
+  assert.equal(registry.resourceGet(paneKey).staleReason, undefined);
+});
+
+test('verification bumps once for multiple resources and unreachable timestamp writes are stable', async () => {
+  const registry = memoryRegistry();
+  await registry.resourceUpsert(entry());
+  await registry.resourceUpsert(entry({ uri: encodeRef({ ...paneRef, pid: 8 }) }));
+  const failure = { code: 'HOST_UNREACHABLE', message: 'timeout' };
+  let version = registry.version;
+  assert.equal(await registry.markUnreachable(HOST, failure, T0 + 1), 2);
+  assert.equal(registry.version, ++version, 'one bump, not one per resource');
+  assert.equal(await registry.markUnreachable(HOST, { ...failure }, T0 + 2), 2);
+  assert.equal(registry.version, version, 'equal errors and timestamp-only writes do not bump');
+  assert.equal(registry.resourceGet(paneKey).lastAttemptAt, T0 + 2);
+  await registry.markUnreachable(HOST, { ...failure, message: 'connection refused' }, T0 + 3);
+  assert.equal(registry.version, ++version, 'changed failure information invalidates inventory');
+  assert.equal(await registry.markVerified(HOST, 'default', inventory(), T0 + 4), 2);
+  assert.equal(registry.version, ++version, 'recovery of multiple resources bumps once');
+  assert.equal(await registry.markVerified(HOST, 'default', inventory(), T0 + 5), 2);
+  assert.equal(registry.version, version);
+});
+
+test('invalidateInventory is serialized behind pending persistence and refuses closed registries', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const delayed = new Promise((resolve) => { entered = resolve; });
+  const registry = await openRegistry({ storageDomain: { open: async () => ({
+    table: () => ({
+      get() {},
+      async put() { entered(); await gate; },
+    }),
+    async close() {},
+  }) } });
+  const writing = registry.hostPin(HOST, { fp: FP });
+  const invalidating = registry.invalidateInventory();
+  await delayed;
+  try {
+    assert.equal(registry.version, 0, 'invalidation cannot overtake pending writes');
+  } finally {
+    release();
+  }
+  await writing;
+  assert.equal(await invalidating, 1);
+  assert.equal(registry.version, 1);
+  assert.equal(await registry.invalidateInventory(), 2);
+  await registry.close();
+  await assert.rejects(() => registry.invalidateInventory(), { code: 'REGISTRY_UNAVAILABLE' });
+});
+
 test('markVerified handles host/server kinds, relocation and ambiguity', async () => {
   const registry = memoryRegistry();
   const serverRef = { ...paneRef, kind: 'server', sid: null, wid: null, pid: null };
@@ -539,7 +623,116 @@ test('purgeHost removes resources and aliases of one host and returns counts', a
   assert.deepEqual(registry.hostCounts('otherhost'), { resources: 1, aliases: 1 });
 });
 
-test('version bumps on every resource/alias/settings/purge mutation only', async () => {
+test('removeHostLocal purges resources and orphan aliases, preserves settings and pins', async () => {
+  const registry = memoryRegistry();
+  await registry.hostPin(HOST, { fp: FP });
+  const pin = registry.hostGet(HOST);
+  const orphanRef = { ...paneRef, pid: 8 };
+  const foreignRef = { ...paneRef, hostId: 'otherhost' };
+  for (const ref of [paneRef, orphanRef, foreignRef]) {
+    await registry.resourceUpsert(entry({ uri: encodeRef(ref) }));
+    await registry.setAlias(resourceKey(ref), 'alias');
+  }
+  await registry.resourceForget(resourceKey(orphanRef));
+  await registry.setSettings({ approval: { enabled: false }, removedHosts: ['already-removed'] });
+  const before = registry.version;
+
+  assert.deepEqual(await registry.removeHostLocal(HOST), { resources: 1, aliases: 2 });
+  assert.equal(registry.version, before + 1, 'one version bump for the compound mutation');
+  assert.deepEqual(registry.hostCounts(HOST), { resources: 0, aliases: 0 });
+  assert.deepEqual(registry.hostCounts('otherhost'), { resources: 1, aliases: 1 });
+  assert.deepEqual((await registry.aliasList()).map(({ key }) => key), [resourceKey(foreignRef)]);
+  assert.deepEqual(await registry.getSettings(), {
+    approval: { enabled: false }, removedHosts: ['already-removed', HOST],
+  });
+  assert.deepEqual(registry.hostGet(HOST), pin, 'local removal does not forget the TOFU pin');
+  assert.deepEqual(await registry.removeHostLocal(HOST), { resources: 0, aliases: 0 });
+  assert.deepEqual(registry.removedHosts(), ['already-removed', HOST], 'repeated removal does not duplicate ids');
+  await assert.rejects(() => registry.removeHostLocal(''), { code: 'INVALID_ARGUMENT' });
+});
+
+test('concurrent removeHostLocal calls serialize purge and delayed settings persistence together', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const delayed = new Promise((resolve) => { entered = resolve; });
+  let delayNextSettingsWrite = false;
+  const tables = new Map();
+  const operations = [];
+  const registry = await openRegistry({ storageDomain: { open: async () => ({
+    table(name) {
+      if (!tables.has(name)) {
+        const map = new Map();
+        tables.set(name, {
+          get: (key) => map.get(key),
+          entries: () => map.entries(),
+          async put(key, value) {
+            if (name === 'settings' && delayNextSettingsWrite) {
+              delayNextSettingsWrite = false;
+              entered();
+              await gate;
+            }
+            operations.push(`${name}:put:${key}`);
+            map.set(key, value);
+          },
+          async delete(key) {
+            operations.push(`${name}:delete:${key}`);
+            return map.delete(key);
+          },
+          async update(key, fn) {
+            const next = fn(map.get(key));
+            map.set(key, next);
+            return next;
+          },
+        });
+      }
+      return tables.get(name);
+    },
+    async close() {},
+  }) } });
+  const secondRef = { ...paneRef, hostId: 'second-host' };
+  const secondKey = resourceKey(secondRef);
+  for (const ref of [paneRef, secondRef]) {
+    await registry.resourceUpsert(entry({ uri: encodeRef(ref) }));
+    await registry.setAlias(resourceKey(ref), 'alias');
+  }
+  // Include legacy and future settings to verify removal does not reconstruct/drop them.
+  const settings = {
+    id: 'global', approval: { enabled: false, legacy: 'keep' },
+    removedHosts: ['already-removed'], future: { keep: true },
+  };
+  await tables.get('settings').put('global', settings);
+  operations.length = 0;
+  const before = registry.version;
+  delayNextSettingsWrite = true;
+  const first = registry.removeHostLocal(HOST);
+  const second = registry.removeHostLocal('second-host');
+  await delayed;
+  try {
+    assert.equal(registry.version, before, 'version waits for persistence');
+    assert.deepEqual(registry.removedHosts(), ['already-removed']);
+    assert.deepEqual(registry.hostCounts('second-host'), { resources: 1, aliases: 1 },
+      'second purge cannot start while the first removal settings write is pending');
+  } finally {
+    release();
+  }
+  assert.deepEqual(await Promise.all([first, second]), [
+    { resources: 1, aliases: 1 }, { resources: 1, aliases: 1 },
+  ]);
+  assert.deepEqual(tables.get('settings').get('global'), {
+    ...settings, removedHosts: ['already-removed', HOST, 'second-host'],
+  });
+  assert.deepEqual(operations, [
+    `resources:delete:${paneKey}`, `aliases:delete:${paneKey}`, 'settings:put:global',
+    `resources:delete:${secondKey}`, `aliases:delete:${secondKey}`, 'settings:put:global',
+  ]);
+  assert.equal(registry.version, before + 2);
+  assert.deepEqual(registry.resourceList(), []);
+  assert.deepEqual(await registry.aliasList(), []);
+  await registry.close();
+});
+
+test('version bumps on resource/alias/settings/purge mutations', async () => {
   const registry = memoryRegistry();
   assert.equal(registry.version, 0);
 
@@ -556,7 +749,7 @@ test('version bumps on every resource/alias/settings/purge mutation only', async
   await registry.resourceForget(paneKey);
   assert.equal(registry.version, 6);
 
-  // Read-only calls and inventory side effects must not bump the version.
+  // Verification with no matching resources must not bump the version.
   await registry.markVerified(HOST, 'default', inventory(), T0);
   await registry.markUnreachable(HOST, { code: 'HOST_UNREACHABLE', message: 'x' }, T0);
   assert.equal(registry.version, 6);
