@@ -2,7 +2,7 @@
 
 Cross-conversation **remote tmux** for DeepSeek Harness (DSH): a right-sidebar **tmux** panel that presents each host as a task list, a composer chip (**Reference**) that binds a conversation's agent to an exact pane, and an approval-gated tool surface so agents can inspect and operate that pane — safely and durably, even across chat reloads, DSH restarts, and `/compact`.
 
-Plain ESM, no build step. Node ≥ 22. `MIT`. Current version **0.1.1**.
+Plain ESM, no build step. Node ≥ 22. `MIT`. Current version **0.1.1**; the accepted artifact is commit **`c600ece`**, tarball SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07` (version alone does not identify it — an earlier 0.1.1 build failed submission and sent-history navigation). Independent SOL clicks verified the fixes and an independent ASTRA review accepted the candidate within the scope recorded in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md). No publication or production update is implied.
 
 ---
 
@@ -10,15 +10,15 @@ Plain ESM, no build step. Node ≥ 22. `MIT`. Current version **0.1.1**.
 
 | Capability | What you get |
 |---|---|
-| **Task-centric panel** | A "tmux" tab in the DSH Web right sidebar (plus an opener icon in the composer toolbar). Hosts list their **tasks** (sessions); a task with one window and one pane is a single compact row, multi-window/multi-pane tasks expand. A task row is titled by its local alias or remote session name; pane rows read `窗格 <index> · <cmd>` (an alias wins). **高级详情** reveals sockets, server generation and `$N`/`@N`/`%N` ids. |
+| **Task-centric panel** | A "tmux" tab in the DSH Web right sidebar (plus an opener icon in the composer toolbar). Hosts list their **tasks** (sessions); a task with one window and one pane is a single compact row, multi-window/multi-pane tasks expand. A task row is titled by its local alias or remote session name; pane rows read `窗格 <index> · <cmd>` (an alias wins). A collapsed task whose children have distinct aliases adds a **包含：…** subtitle naming those child tasks (so the developer task is visible while `claude-ready` is collapsed); expanding shows distinct child names instead of repeats. **高级详情** reveals sockets, server generation and `$N`/`@N`/`%N` ids. |
 | **Local aliases** | **别名** on a row (or the `tmux_xc_alias` agent tool) sets a friendly display name. It is local metadata only: it never renames the remote tmux object, and setting an alias registers the target if it was not registered. |
-| **Copy attach** | **复制连接命令** offers **Bash (Linux/macOS/Git Bash)** and **PowerShell (Windows)** forms, both with `ssh -t -o ClearAllForwardings=yes` and the exact socket + session/window/pane target. `cmd.exe` is not supported. For `transport: local`, the Bash form is the local tmux command (the PowerShell form is ssh-only). |
-| **Reference** | **引用** inserts a native composer chip (`@[label](dsh-tmux:v1/...)`). Nothing is sent and no keystroke reaches tmux. When you do send it, the message keeps the token and re-renders as a chip after reload. |
-| **One-click navigation** | Clicking a tmux chip in a conversation opens the tmux panel, re-resolves the exact identity, selects the target and shows a **read-only snapshot**. A stale reference shows an honest message and is never retargeted. |
+| **Copy attach** | **复制连接命令** offers **Bash (Linux/macOS/Git Bash)** and **PowerShell (Windows)** forms. The ssh forms are `ssh -t -o ClearAllForwardings=yes '<alias>' '<remote tmux command>'` with the exact socket + session/window/pane target. **The ssh alias and its config must exist on the machine where you paste the command** (the plugin does not read or embed your ssh config); for `transport: local` the Bash form is the local tmux command and runs on the tmux machine. The **PowerShell entry is disabled with an explanation** for local hosts. `cmd.exe` is not supported. A failed copy leaves the clipboard unchanged. |
+| **Reference** | **引用** inserts a native composer chip (`@[label](dsh-tmux:v1/...)`). Nothing is sent and no keystroke reaches tmux. Insertion is asynchronous — **wait until the chip is visibly in the composer before sending**; then the message keeps the token and re-renders as a chip after reload. |
+| **One-click navigation** | Clicking a tmux chip in a conversation opens the tmux panel, re-resolves the exact identity, selects the target and shows a **read-only snapshot**. A stale reference shows an honest message and is never retargeted. Sent-history navigation was independently verified on the accepted candidate for exact-pane, reload, same-name replacement and restarted-server paths; renamed/moved targets were not tested. |
 | **Durability** | References submitted in a conversation are stored per conversation and re-announced to the agent after `/compact`, so long chats keep working. |
 | **Agent tools** | `tmux_xc_*` tools for list / inspect / resolve / references / capture / create / adopt / alias / send / detach / forget / kill. |
-| **Approvals** | **One switch** in the panel: **插件审批 开/关**, default **ON**, covering create / send / delete(kill) / detach. OFF runs those actions without plugin approval on configured, non-removed hosts. DSH host permission rules and SSH authentication still apply. |
-| **Reliable send** | Text and `Enter` are two guarded steps (default 400 ms apart), so interactive CLIs receive a real Enter instead of a paste. The result reports `delivered` and a heuristic `submission` state — delivery is not execution. |
+| **Approvals** | **One switch** in the panel: **插件审批 开/关**, default **ON**, covering create / send / delete(kill) / detach. OFF runs those actions without extra plugin approval on configured, non-removed hosts — it is not an authorization bypass: DSH host rules and SSH authentication still apply (an independent DSH host deny still blocked creation with the switch OFF). Explicit owner-side delete/remove confirmations are a separate mechanism and remain. |
+| **Reliable send** | Text and `Enter` are two guarded steps (default 400 ms apart), so interactive CLIs receive a real Enter instead of a paste. The result reports `delivered` and a heuristic `submission` state — delivery is not execution, and `cleared` does not prove execution. Independently verified on a shell and on real Claude Code 2.1.302 (prompt submitted, no successful model response); other TUIs and platforms remain unverified. |
 
 ## How it fits the DSH pieces
 
@@ -26,10 +26,11 @@ It reuses DSH's own primitives (right-sidebar slots, input-trigger chips, `inser
 
 ## Requirements
 
-- DSH 0.2.1-rc.2 (Linux web **verified**; Windows desktop **expected, user-verified**).
+- DSH 0.2.1-rc.2 (Linux web **verified**; Windows desktop **expected, user verification pending** — not a support claim).
 - Node ≥ 22.
-- A remote **tmux ≥ 3.0a** (3.0a is the tested floor) on a Linux host, reached through an existing OpenSSH alias.
-- Linux DSH can also talk to tmux running on the *same* host with `transport: local`.
+- A remote **tmux ≥ 3.0a** (3.0a is the tested floor) on a Linux host, reached through an existing OpenSSH alias. The alias and its ssh config must exist **on the connecting machine**, since the copy command is only `ssh <alias> …`.
+- Linux DSH can also talk to tmux running on the *same* host with `transport: local`; the local Bash command runs on the tmux machine and local PowerShell is disabled.
+- Windows/macOS execution, PowerShell 5.1 and tmux versions other than 3.0a are **not** independently certified.
 
 Full matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
@@ -115,11 +116,11 @@ aliases:
 
 ## Usage in 30 seconds
 
-1. Open the **tmux** panel and find the task (session); expand it only if it has several windows/panes.
-2. Optionally set **别名**, then click **引用** → a chip lands in the current composer (nothing sent).
+1. Open the **tmux** panel and find the task (session); expand it only if it has several windows/panes. A collapsed task shows a **包含：…** subtitle when its children have distinct aliases.
+2. Optionally set **别名**, then click **引用** → wait until the chip is visibly in the composer (nothing is sent).
 3. Tell the agent what to do ("run `git status` in that pane", "capture its recent output", …) and approve when asked.
 
-Chat A can `create`/`adopt` a session so chat B finds it; chat B references a pane and the agent acts on exactly that pane. Create registers its result in code; an agent that starts a target through a shell/terminal tool, or that the user references, must `tmux_xc_adopt` it so it appears in the panel. Tasks and worked examples: [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md).
+Chat A can `create`/`adopt` a session so chat B finds it; chat B references a pane and the agent acts on exactly that pane. Create registers its result in code. A target an agent starts through a shell/terminal tool is **live-discovered** by inventory — it can appear in the panel after a refresh without adoption — but `tmux_xc_adopt` is required to **register** it (durable metadata, badge, alias/recovery basis). Tasks and worked examples: [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md).
 
 ## Agent tools
 
@@ -135,17 +136,17 @@ Chat A can `create`/`adopt` a session so chat B finds it; chat B references a pa
 | `tmux_xc_create` | `hostId`, `socketId?`, `kind`, `name?`, `parentRef?`, `cwd?`, `horizontal?` | approval switch (create) | create session / window / pane; registers the result in code |
 | `tmux_xc_send` | `ref`, `text?`, `keys?`, `enter?` | approval switch (send) | deliberate input to exactly one pane (≤ 16 KiB, hex-encoded); text and Enter are separate guarded steps |
 | `tmux_xc_detach` | `ref` | approval switch (detach) | detach clients (remote processes keep running) |
-| `tmux_xc_forget` | `ref?` or `key?` | allow | remove a registry entry only — never touches remote (panel label: **取消登记**) |
+| `tmux_xc_forget` | `ref?` or `key?` | allow | remove one registry entry only — never touches remote, does not cascade to registered children (panel label: **取消登记**) |
 | `tmux_xc_kill` | `ref`, `confirm` | approval switch (delete/kill) | destroy exactly one session / window / pane; `confirm` = exact target string; never the server, never files |
 
-With the plugin approval switch ON, the four mutating tools ask through DSH's native card. With it OFF they run without plugin approval on configured, non-removed hosts. In a permission mode where DSH has no approval channel, DSH itself denies with its own message; the plugin never reinterprets that as consent.
+With the plugin approval switch ON, the four mutating tools ask through DSH's native card. With it OFF they run without extra **plugin** approval on configured, non-removed hosts; DSH's own permission/host deny is a separate layer and still applies (verified: an independent DSH host deny rejected a create while the switch was OFF). Explicit delete/host-remove confirmations are owner UI actions, not plugin approval cards. In a permission mode where DSH has no approval channel and an ask is genuinely required, DSH itself denies with its own message; the plugin never reinterprets that as consent.
 
 ## Safety & identity
 
 - **Allow-list only.** Hosts/sockets come from config; no credentials are stored and nothing weakens host verification (`BatchMode=yes`, `ClearAllForwardings=yes`, no agent/X11 forwarding, **no** `StrictHostKeyChecking=no`). The plugin uses your ssh config + `known_hosts`.
 - **Owner-only.** Client routes are DSH-owner-only; discovery/adopt are read-only on the remote.
 - **Stable identity.** A reference binds host fingerprint + uid + socket + server generation + `$`/`@`/`%` ids. Renamed objects still resolve; a restarted server or a reused name **fails** (`SERVER_RESTARTED` / `TARGET_GONE`) instead of redirecting to the wrong shell.
-- **Distinct actions.** detach ≠ unregister (取消登记, the renamed forget) ≠ kill. A panel **删除窗格/窗口/会话** is a click-confirmed, exact-scope kill of one object; it never kills the tmux server and never deletes files. **移除主机** either purges local registrations/aliases (plugin-only; restore in 高级详情, data not restored) or terminates only the selected sessions first — never the server — and removes the host only when every kill succeeded. It never edits the profile config file.
+- **Distinct actions.** detach ≠ unregister (取消登记, the renamed forget) ≠ kill. A panel **删除窗格/窗口/会话** is a click-confirmed, exact-scope kill of one object; it never kills the tmux server and never deletes files. **取消登记** removes only that one registry record — it does not cascade to registered child items and does not erase aliases or chat history. **移除主机** defaults to plugin-only (purges local registrations/aliases; restore in 高级详情, data not restored); remote termination needs an explicit mode switch and an explicit session selection (which starts empty) and still never touches the tmux server; the host is removed only when every selected kill succeeded. It never edits the profile config file.
 - `synchronize-panes` windows refuse input; captured output is sanitized and fenced as untrusted.
 
 More: [docs/KNOWN-LIMITATIONS.md](docs/KNOWN-LIMITATIONS.md), [docs/CONTRACTS.md](docs/CONTRACTS.md).

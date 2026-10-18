@@ -4,6 +4,8 @@ All notable changes to **dsh-tmux-xc**. Versions follow the plugin's `package.js
 
 ## 0.1.1
 
+**Accepted candidate: commit `c600ece` (`c600ecedf2e5504481e89a6aa8439478dd6b2a8d`), tarball SHA-1 `b39fe0019ebffd6aeb49a78b7f86362bf72dea07`.** Version 0.1.1 alone does not identify this artifact: an earlier 0.1.1 build at `1ee6f78` failed submission and sent-history navigation and was not accepted. The 0.1.1 fixes below were verified by independent SOL clicks and accepted by ASTRA within the scope recorded in [TEST-RESULTS.md](TEST-RESULTS.md). No release or publication is claimed here, and these notes do not certify any later change.
+
 Task-centric panel, local aliases, one approval switch, honest send reporting, panel-side deletion and chip navigation. No remote tmux objects are renamed, no tmux server is ever killed, and no remote files are touched.
 
 ### Added
@@ -27,16 +29,18 @@ Task-centric panel, local aliases, one approval switch, honest send reporting, p
 
 ### Changed
 
-- **Approval defaults** moved from 0.1.0's per-key ask (create/send/detach ask, kill always ask) to **one switch, default ON**, covering create/send/delete(kill)/detach. `kill` follows the switch; the exact `confirm` target string is still required as an agent typo guard. Legacy per-key `allow` is deprecated and honoured **only** when neither a panel setting nor an explicit `approval.enabled` exists.
-- **「忘记」 renamed to 「取消登记」** and moved into the row's **⋯** menu; it still removes only the plugin record (no remote effect).
-- **Workspace filter removed** from the panel (the old 当前工作区/全部 toggle). Registered tasks are badged and sorted first instead.
-- **Send** no longer claims success means execution: text and Enter are delivered separately, and `submission` is explicitly a heuristic. `delivered` ≠ executed.
-- **Panel layout** hides sockets/generations/ids in simple mode; they appear only in 高级详情.
-- **Copy attach** now has two labeled shell entries instead of one generic command.
+- **Approval defaults** moved from 0.1.0's per-key ask (create/send/detach ask, kill always ask) to **one switch, default ON**, covering create/send/delete(kill)/detach. `kill` follows the switch; the exact `confirm` target string is still required as an agent typo guard. Legacy per-key `allow` is deprecated and honoured **only** when neither a panel setting nor an explicit `approval.enabled` exists. OFF removes extra **plugin** asks only; an independently installed DSH host deny still blocks the call.
+- **「忘记」 renamed to 「取消登记」** and moved into the row's **⋯** menu; it still removes only the plugin record (no remote effect) and does not cascade to registered child items, aliases or chat history.
+- **Workspace filter removed** from the panel (the old 当前工作区/全部 toggle). Registered tasks are badged and sorted first instead. The panel lists the **configured hosts/sockets**, not every machine, and it shows live-discovered targets that are not registered — visibility does not require adoption.
+- **Send** no longer claims success means execution: text and Enter are delivered separately, and `submission` is explicitly a heuristic. `delivered` ≠ executed, and `cleared` ≠ executed.
+- **Panel layout** hides sockets/generations/ids in simple mode; they appear only in 高级详情. A **collapsed** session whose windows/panes carry distinct aliases now shows a `包含：…` subtitle listing the child task names (e.g. the developer task under `claude-ready`); expanding shows distinct window/pane names instead of repeating one alias. Display-only: no action's target scope changes.
+- **Copy attach** now has two labeled shell entries instead of one generic command. For `transport: local`, the PowerShell entry is disabled with an explanation (local transport is unsupported), not an enabled entry that fails. Menus/modals are body-portaled and clamped to the viewport, so a bottom host menu is usable at 1500×950 without collapsing other hosts. The Bash tooltip and SSH prerequisite text state that local Bash runs on the tmux machine and that the ssh alias/config must exist on the connecting machine.
+- **Host removal** loads its plan in **plugin-only** mode and resets the selection to empty; reaching remote termination requires explicitly choosing that mode, after which sessions start **unchecked**. This avoids treating a loaded plan as destructive intent.
 
 ### Fixed
 
-- Enter is delivered as its own guarded invocation after a delay, so Ink/raw-mode CLIs (Claude Code, Codex CLI, …) no longer treat `text\r` as a paste and leave the text unsubmitted.
+- **Multi-digit pane acknowledgement (acceptance blocker on `1ee6f78`):** literal `%N` in the native acknowledgement was expanded by tmux 3.0a's `display-message`, so text was typed but the Enter guard refused and the call ended as `OUTCOME_UNKNOWN`. Fixed by escaping literal `%` **only** at the `display-message` output-format boundary; target operands, identity/generation guards, exact nonce-framed matching, the separate Enter step and no-replay behavior are unchanged. Rechecked on a multi-digit shell pane and on real Claude Code 2.1.302: one text-plus-Enter send each, both acknowledged, shell executed exactly once, Claude showed the prompt submitted with an empty input box. **No successful Claude model response was produced** (dummy key, loopback dead port), and Python and other TUIs were not retested.
+- **Sent-history reference rendering (acceptance blocker on `1ee6f78`):** a sent tmux reference with a spaced label could be taken by the generic file-mention renderer, so the history chip opened a nonexistent file. The tmux sent-user-text rule now registers before the generic file rule (order 25 vs 30) with complete validated spaced-token matching, and the persisted token/URI path is retained. Rechecked: sent chip selected exactly the referenced pane with its marker (also after reload); an older stored message now renders as a tmux chip and fails stale after its target was deleted; same-name replacement and a restarted look-alike server gave zero selection and no replacement preview. Renamed/moved targets and other browsers were not tested.
 - Panel navigation re-resolves the exact identity and never re-targets a stale reference to a look-alike object.
 - Killing a last pane no longer leaves the panel selecting a reused numeric id; only a surviving ancestor is revealed.
 
