@@ -36,6 +36,6 @@
   "scripts": {
     "test": "node --test test/unit/*.test.js",
     "test:integration": "node --test --test-concurrency=1 test/integration/*.test.mjs",
-    "pack:release": "npm pack --pack-destination dist"
+    "pack:release": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npm pack --pack-destination dist"
   }
 }
