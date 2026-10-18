@@ -1,6 +1,6 @@
 {
   "name": "dsh-tmux-xc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness plugin: cross-conversation remote tmux over SSH — host→session→window→pane panel, composer references, and approval-gated agent tools",
   "type": "module",
   "main": "./lib/index.js",
