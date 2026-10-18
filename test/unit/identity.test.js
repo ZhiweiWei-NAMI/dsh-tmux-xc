@@ -247,6 +247,9 @@ test('refFromInventory builds refs for every kind and throws NOT_FOUND', () => {
   assert.throws(() => refFromInventory('namilab', 'default', inv, 'session', 99), { code: 'NOT_FOUND' });
   assert.throws(() => refFromInventory('namilab', 'default', inv, 'window', 99), { code: 'NOT_FOUND' });
   assert.throws(() => refFromInventory('namilab', 'default', inv, 'weird', 1), { code: 'INVALID_ARGUMENT' });
+  const noServer = inventory({ server: null, sessions: [] });
+  assert.equal(refFromInventory('namilab', 'default', noServer, 'host', null).kind, 'host');
+  assert.throws(() => refFromInventory('namilab', 'default', noServer, 'pane', 7), { code: 'NOT_FOUND' });
 });
 
 test('labelFor renders the documented shape', () => {
