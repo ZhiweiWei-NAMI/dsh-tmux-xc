@@ -21,3 +21,14 @@ These are current, intentional or structural limits of dsh-tmux-xc v0.1.0. They 
 - detach ≠ forget ≠ kill: detach kicks clients (processes keep running); forget removes registry rows only; kill destroys remote objects.
 - `synchronize-panes` windows refuse input (a pane can't be targeted uniquely).
 - Untrusted remote output is sanitized and fenced; tokens inside captured output are never parsed as references.
+
+## Added after the final verification run (2026-10-17)
+
+| # | Limitation | Notes |
+|---|---|---|
+| 11 | **Same-version reinstall keeps old files** | pnpm treats an unchanged version + path as installed; use `remove` then `add` (or bump the version). |
+| 12 | **Create approval cards are verbose** | They list every field (including placeholder ids `$- @- %-` for not-yet-existing objects). Complete, but noisy. |
+| 13 | **`registry: memory` is explicit-only** | Persistent-storage failures disable operations (`REGISTRY_UNAVAILABLE`) instead of silently falling back; set `registry: memory` only when you accept losing everything on restart. |
+| 14 | **No live terminal in the panel** | The panel lists and references; viewing is via "Copy attach command" in your own terminal or the official DSH terminal (user action). A dsh-tmux-cc fork is documented, not implemented ([dsh-tmux-cc-fork.md](dsh-tmux-cc-fork.md)). |
+| 15 | **Each pre-step re-resolution costs one remote round trip per host/socket** | Only when a conversation has references and a new user batch or a compaction occurred. |
+| 16 | **tmux 3.0a `detach-client -s` needs an attached client** | The plugin enumerates clients and detaches each by name instead; zero attached clients is reported as `detached 0`. |

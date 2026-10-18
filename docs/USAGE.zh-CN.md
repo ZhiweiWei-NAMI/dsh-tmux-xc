@@ -88,6 +88,15 @@
 | `HOST_IDENTITY_CHANGED` | 别名现在指向不同机器/用户 | 确认 ssh 配置；必要时 forget 主机记录后重新采纳 |
 | `SERVER_GONE` | 该 socket 上无 tmux 服务器 | 先启动远端 tmux 再刷新 |
 | `AMBIGUOUS` | 目标跨多个窗格/会话，无法唯一确定（如 session/窗口引用却含多个窗格） | 改为引用具体窗格 |
+| `TARGET_CHANGED` | 你批准后、执行前目标身份发生了变化（审批绑定的是批准时的精确身份） | 重新解析/引用后再发起，重新审批 |
+| `SYNCHRONIZED_PANES` | 目标窗口开启了 `synchronize-panes`，输入会广播到同窗所有窗格 | 插件拒绝发送且不会改动该选项；如确需发送，请自行关闭同步后重试 |
+| `PANE_IN_MODE` / `PANE_DEAD` / `PANE_INPUT_DISABLED` | 窗格处于复制/查看模式、进程已退出或输入被禁用 | 在终端里退出该模式 / 重建窗格后重试 |
+| `OUTCOME_UNKNOWN` | 变更已发出后连接中断或被取消，无法确认是否生效 | **不会自动重放**；先 `tmux_xc_capture` 核实再决定是否重试 |
+| `REMOTE_ERROR` | tmux 拒绝了命令（消息里附带 tmux 原始报错，已清洗） | 按报错处理 |
+| `HOST_UNREACHABLE` / `SSH_AUTH` / `SSH_HOSTKEY` / `SSH_MISSING` / `TIMEOUT` | ssh 层失败：网络、认证（BatchMode 不能输口令）、主机密钥不符、找不到 ssh、超时 | 先在终端执行 `ssh -o BatchMode=yes <别名> tmux -V` 自检；主机密钥问题请按 OpenSSH 正常流程核实，插件绝不跳过校验 |
+| `REGISTRY_UNAVAILABLE` | 持久注册表无法打开（存储损坏/版本不兼容/重复打开），插件按设计"失败即关闭" | 修复 `$DSH_HOME/storages/dsh_tmux_xc/` 后重启 DSH；仅在明确需要时配置 `registry: memory`（重启即丢失） |
+| `CONFIRM_MISMATCH` | kill 的 `confirm` 与解析出的目标串不一致 | 先 `tmux_xc_resolve` 取得目标串（如 `lab:e2e:%1`）再确认 |
+| `HOST_NOT_ALLOWED` / `SOCKET_NOT_ALLOWED` | 主机/socket 不在配置白名单 | 在 `cordis.patch.yml` 的 `tmux-xc.config.hosts` 中添加 |
 
 `/compact`（上下文重置）后插件会自动向 agent 重新播报本会话的引用，agent 会在操作前重新解析；也可让 agent 用 `tmux_xc_references` 主动取回。
 

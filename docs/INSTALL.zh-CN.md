@@ -206,3 +206,16 @@ dsh plugin --profile <profile> remove dsh-tmux-xc
 | `SSH_HOSTKEY` | known_hosts 中主机指纹变化/不符；按你的安全流程更新 `known_hosts` |
 | `REMOTE_TOOL_MISSING` | 远端未安装 tmux，或别名落地的 PATH 找不到 tmux |
 | 审批卡片不出现、工具被拒 | 当前权限模式禁用了审批（"never"）；插件不会把「无法审批」当作「允许」，请在权限设置中允许审批 |
+
+---
+
+## 附：升级同一版本号的注意事项（已在 NaMILab 实测）
+
+`dsh plugin add` 底层是 pnpm。若重新打包的 tarball **版本号与路径不变**，pnpm 会认为"已安装"而保留旧文件。升级时请任选其一：
+
+```sh
+dsh plugin --profile <profile> remove dsh-tmux-xc
+dsh plugin --profile <profile> add /abs/path/dsh-tmux-xc-0.1.0.tgz
+```
+
+或先提升 `package.json` 的 `version` 再打包。完成后重启 DSH 并刷新页面。`remove` 会把插件从 profile 的 `dsh.profile.bundles` 中移除，`add` 会自动加回；你的 `- id: tmux-xc` 配置块与 `storages/dsh_tmux_xc/` 注册表数据都不受影响。
