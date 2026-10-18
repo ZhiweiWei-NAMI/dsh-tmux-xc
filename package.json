@@ -1,0 +1,41 @@
+{
+  "name": "dsh-tmux-xc",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: cross-conversation remote tmux over SSH — host→session→window→pane panel, composer references, and approval-gated agent tools",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/", "cordis.patch.yml", "README.md", "README.zh-CN.md", "LICENSE", "docs/"],
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/ZhiweiWei-NAMI/dsh-tmux-xc.git" },
+  "keywords": ["deepseek-harness", "dsh", "dsh-plugin", "tmux", "ssh", "remote"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-storage-domain": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "zod": "^4.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/unit/",
+    "test:integration": "node --test --test-concurrency=1 test/integration/",
+    "pack:release": "npm pack --pack-destination dist"
+  }
+}
