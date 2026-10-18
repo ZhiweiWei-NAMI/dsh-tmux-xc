@@ -149,6 +149,11 @@ test('conversationAddRefs dedupes by uri and keeps firstSeenAt', async () => {
   assert.equal(announced.announcedAt, T0 + 5);
   assert.equal(registry.conversationGet('sess-a').announcedAt, T0 + 5);
 
+  await assert.rejects(
+    () => registry.conversationAddRefs('sess-a', [{ uri: 'dsh-tmux:v1/x', label: 'bad' }]),
+    { code: 'INVALID_ARGUMENT' },
+  );
+
   // A never-seen conversation is created with an empty ref list.
   const fresh = await registry.conversationSetAnnounced('sess-new', T0 + 9);
   assert.deepEqual(fresh.refs, []);
@@ -293,7 +298,12 @@ test('registrySpec declares the three tables and is path-safe', () => {
   assert.equal(spec.layout, 'per-record');
   assert.deepEqual(Object.keys(spec.tables), ['hosts', 'resources', 'conversations']);
   assert.match(spec.name, /^[a-z][a-z0-9_]*$/);
-  assert.throws(() => registrySpec('dsh-tmux-xc'));
+  // DESIGN spellings are accepted and normalized to the DSH unit charset.
+  assert.equal(registrySpec('dsh-tmux-xc').name, 'dsh_tmux_xc');
+  assert.equal(registrySpec('dsh-tmux-xc.p.web').name, 'dsh_tmux_xc_p_web');
+  assert.throws(() => registrySpec('Dsh Tmux'));
+  assert.throws(() => registrySpec('9bad'));
+  assert.throws(() => registrySpec(''));
 });
 
 test('openRegistry uses ctx.storage.domain.open and reports the domain name', async () => {
