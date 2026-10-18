@@ -431,9 +431,9 @@ test('C5: submission is unknown without a usable probe or a visible tail', () =>
   });
   assert.equal(parseSubmission([], 'hi').state, 'unknown');
   assert.equal(parseSubmission([['cursor', 'nothex', '1']], 'hi').state, 'unknown');
-  const noTail = classifySubmission({ text: '   ', cursor: ['cursor', Buffer.from('x').toString('hex'), '1'] });
+  const noTail = classifySubmission({ text: '   ', cursor: ['cursor', hex('x'), '1'] });
   assert.equal(noTail.checked, true);
-  assert.equal(noTail.state, 'unknown');
+  assert.equal(noTail.state, 'cleared', 'whitespace-only text cannot be pending');
   // ANSI/OSC in a captured row is stripped before matching.
   const colored = `\u001b[32m> deploy\u001b[0m`;
   assert.equal(parseSubmission([['cursor', hex(colored), '2']], 'deploy').state, 'pending');

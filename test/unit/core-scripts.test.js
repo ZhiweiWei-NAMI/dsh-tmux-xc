@@ -429,8 +429,8 @@ test('C5: the cursor-line probe is read-only, bounded and sanitized on the host'
   // tmux 3.0a: positive -S/-E are screen-start offsets, so the visible cursor
   // row is addressed directly; capture stays a bounded single row.
   assert.ok(script.includes('display-message -p -t "%7" "#{cursor_y}"'));
-  assert.ok(script.includes('capture-pane -p -J -t "%7" -S "$cy" -E "$cy"'));
-  assert.equal(script.includes('capture-pane -p -J -t "%7" -S "$cy" -E "$cy" |'), false);
+  assert.ok(script.includes(`capture-pane -p -J -t "%7" -S '"$cy"' -E '"$cy"'`));
+  assert.equal(script.includes(`capture-pane -p -J -t "%7" -S '"$cy"' -E '"$cy"' |`), false);
   assert.ok(script.includes('head -c 4096'));
   assert.ok(script.includes('od -An -v -tx1'));
   const probe = script.slice(script.indexOf('#{cursor_y}'));
