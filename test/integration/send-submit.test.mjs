@@ -7,6 +7,7 @@ import { describe, it } from 'node:test'
 import {
   capturePane,
   checkInfra,
+  newCatSession,
   newDetachedSession,
   paneIdOf,
   suiteContext,
@@ -101,6 +102,35 @@ describe('C5 send / Enter submission (real tmux, isolated socket)', { skip, time
     // A paste chunk (text and '\r' together) would have reported PASTE instead.
     const pastes = [...captured.matchAll(/"marker":"PASTE"/g)]
     assert.equal(pastes.length, 0, 'text and Enter were not delivered as one paste chunk')
+  })
+
+  it('text+Enter acknowledges a multi-digit pane id and submits exactly once', async (t) => {
+    const ctx = suiteContext(t)
+    if (!ctx) return
+    const service = await ctx.makeService()
+    t.after(() => service.close())
+    // Fresh sockets normally cover only %0. Allocate %0..%9 first so this
+    // target exercises tmux 3.0a's strftime expansion of literal %10 and up.
+    for (let i = 0; i < 10; i += 1) {
+      newCatSession(ctx.socketName, uniqueName('padding'))
+    }
+    const target = startProgram(ctx, uniqueName('ink-high'))
+    assert.ok(Number(target.slice(1)) >= 10, `expected a multi-digit pane id, got ${target}`)
+    await waitForPaneText(ctx.socketName, target, '"marker":"READY"', 20000)
+
+    const adopted = await adoptPane(service, target)
+    const text = `high-pane ${process.pid} submit once`
+    // One send only: a missing text acknowledgement must not be masked by a retry.
+    const result = await service.send({ uri: adopted.uri, text, enter: true })
+
+    assert.deepEqual(result.delivered, { text: true, keys: 0, enter: true })
+    assert.equal(result.submission.checked, true)
+    assert.equal(result.submission.state, 'cleared', JSON.stringify(result.submission))
+    await waitForPaneText(ctx.socketName, target, '"marker":"SUBMITTED"', 15000)
+    const captured = capturePane(ctx.socketName, target)
+    assert.equal([...captured.matchAll(/"marker":"SUBMITTED"/g)].length, 1)
+    assert.ok(captured.includes(`"marker":"SUBMITTED","value":"${text}"`))
+    assert.equal(captured.includes('"marker":"PASTE"'), false)
   })
 
   it('a program that never clears its line reports submission pending', async (t) => {

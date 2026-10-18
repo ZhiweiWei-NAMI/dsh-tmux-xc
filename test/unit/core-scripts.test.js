@@ -177,6 +177,30 @@ test('RV1-08: send success marker follows all queued actions and failure stops a
   assert.ok(script.indexOf('if [ "$rc" -ne 0 ]') < script.indexOf('printf \'%s\\n\' "$out"'));
 });
 
+test('native display records escape literal percent without changing targets or exact acknowledgement matching', () => {
+  const frame = (...fields) => `XC1${NONCE}\x1f${fields.join(`\x1f${NONCE}\x1f`)}\x1e${NONCE}\x1e`;
+  for (const pid of [7, 10, 15]) {
+    const target = `%${pid}`;
+    const script = readable(sendScript(NONCE, SOCKET, { ...EXPECT, pid, target }, {
+      hex: ['61'], enter: true,
+    }));
+    const formats = [...script.matchAll(/display-message -p "([^"]*)"/g)].map((match) => match[1]);
+    assert.ok(formats.includes(frame('ok', `%${target}`, '1', '1')),
+      'escape the literal pane id at the display-message boundary');
+    assert.ok(formats.some((format) => format.includes(`#{==:#{pane_id},%${target}}`)),
+      'pane ids inside native guard refusal records must also be escaped');
+    for (const format of formats) {
+      assert.equal(format.replaceAll('%%', '').includes('%'), false, 'no bare percent in display formats');
+    }
+    assert.ok(script.includes(`if-shell -F -t "${target}"`));
+    assert.ok(script.includes(`#{==:#{pane_id},${target}}`), 'the actual guard is not time-expanded');
+    assert.ok(script.includes(`send-keys -t "${target}" -H 61`));
+    assert.ok(script.includes(`send-keys -t "${target}" Enter`));
+    assert.ok(script.includes(`*'${frame('ok', target, '1', '1')}'*) ;;`),
+      'keep the exact nonce-framed match against the unescaped output');
+  }
+});
+
 test('create uses dimensions, argv and format-safe cwd in all creation paths', () => {
   const direct = createSessionScript(NONCE, SOCKET, {
     name: 'train_1', cwd: '/tmp/a b', command: ['bash', '-l'], width: 120, height: 40,
