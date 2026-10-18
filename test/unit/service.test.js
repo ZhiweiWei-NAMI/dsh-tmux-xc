@@ -98,6 +98,9 @@ function makeTransport(expectedHost = {
       assert.equal(alias, expectedHost.ssh);
       if (script.includes('list-panes')) return { records: state.inventory(), stderr: '', exitCode: 0 };
       if (state.scriptError !== undefined) throw state.scriptError;
+      // A C5 send script also contains a read-only capture-pane probe, so it
+      // must be classified by its send-keys action before the capture branch.
+      if (script.includes('send-keys')) return { records: state.send, stderr: '', exitCode: 0 };
       if (script.includes('capture-pane')) {
         return {
           records: [['capture', Buffer.from('hello\n\u001b[31mred\u001b[0m\nworld', 'utf8').toString('hex')]],
@@ -105,7 +108,6 @@ function makeTransport(expectedHost = {
           exitCode: 0,
         };
       }
-      if (script.includes('send-keys')) return { records: state.send, stderr: '', exitCode: 0 };
       if (script.includes('detach-client')) return { records: state.detach, stderr: '', exitCode: 0 };
       if (script.includes('kill-pane') || script.includes('kill-window') || script.includes('kill-session')) {
         return { records: [], stderr: '', exitCode: 0 };
@@ -874,4 +876,123 @@ test('close aborts and settles complete in-flight operations before returning', 
   await closing;
   await rejected;
   await assert.rejects(service.resolveRef(ref()), { code: 'CANCELLED' });
+});
+
+/** Records a successful text+Enter send, with an optional cursor row. */
+function sendRecords({ cursorLine = null, enter = true } = {}) {
+  const records = [['begin'], ['ok', '%7', '5', '3']];
+  if (enter) records.push(['enter', '5']);
+  if (cursorLine !== null) records.push(['cursor', Buffer.from(cursorLine).toString('hex'), '4']);
+  records.push(['end']);
+  return records;
+}
+
+test('C5: send returns delivered and submission after a cleared Enter', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = sendRecords({ cursorLine: '~/project $ ' });
+  const result = await service.send({ uri: ref(), text: 'echo hi', enter: true });
+  assert.deepEqual(result.delivered, { text: true, keys: 0, enter: true });
+  assert.equal(result.submission.checked, true);
+  assert.equal(result.submission.state, 'cleared');
+  assert.equal(result.bytes, 7);
+});
+
+test('C5: submission is pending while the sent text still occupies the cursor line', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = sendRecords({ cursorLine: '> please run the tests now' });
+  const result = await service.send({ uri: ref(), text: 'please run the tests now', enter: true });
+  assert.equal(result.delivered.enter, true);
+  assert.deepEqual(result.submission, { checked: true, state: 'pending' });
+});
+
+test('C5: submission only looks at the last 24 visible characters', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  const text = `${'x'.repeat(60)}TAIL_24_CHARS_1234567890123456`;
+  transport.state.send = sendRecords({ cursorLine: 'pane output tail' });
+  const result = await service.send({ uri: ref(), text, enter: true });
+  assert.equal(result.submission.state, 'cleared', 'an old prefix does not make it pending');
+  transport.state.send = sendRecords({ cursorLine: 'TAIL_24_CHARS_1234567890123456' });
+  assert.equal((await service.send({ uri: ref(), text, enter: true })).submission.state, 'pending');
+});
+
+test('C5: a failed cursor capture reports unknown, never a false cleared', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = sendRecords({ cursorLine: null });
+  const result = await service.send({ uri: ref(), text: 'hello', enter: true });
+  assert.equal(result.delivered.enter, true);
+  assert.equal(result.submission.state, 'unknown');
+});
+
+test('C5: no Enter requested means no submission check and enter false', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = [['ok', '%7', '2', '1']];
+  const result = await service.send({ uri: ref(), text: 'hi' });
+  assert.deepEqual(result.delivered, { text: true, keys: 0, enter: false });
+  assert.equal(result.submission.checked, false);
+  assert.equal(result.submission.state, 'unknown');
+});
+
+test('C5: a failed Enter guard reports delivered text and the guard code', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = [['ok', '%7', '5', '3'], ['enterfail', 'TARGET_CHANGED', '']];
+  let error;
+  await assert.rejects(
+    service.send({ uri: ref(), text: 'hello', enter: true }),
+    (err) => { error = err; return err.code === CODES.TARGET_CHANGED; },
+  );
+  assert.deepEqual(error.details.delivered, { text: true, keys: 0, enter: false });
+  assert.equal(error.details.enterFailure, 'TARGET_CHANGED');
+  assert.match(error.message, /text delivered but Enter was not delivered/);
+  assert.equal(transport.calls.filter((call) => call.mutating).length, 1, 'never replayed');
+});
+
+test('C5: enter-only guard failures still report the precise code and no text', async () => {
+  const transport = makeTransport();
+  const { service } = makeService(transport);
+  transport.state.send = [['enterfail', 'PANE_DEAD', '']];
+  let error;
+  await assert.rejects(
+    service.send({ uri: ref(), enter: true }),
+    (err) => { error = err; return err.code === CODES.PANE_DEAD; },
+  );
+  assert.deepEqual(error.details.delivered, { text: false, keys: 0, enter: false });
+});
+
+test('C5: send.enterDelayMs defaults to 400 and is clamped to [0, 5000]', async () => {
+  for (const [value, expected] of [
+    [undefined, 'sleep 0.400 2>/dev/null || sleep 1'],
+    [0, null],
+    [1500, 'sleep 1.500 2>/dev/null || sleep 2'],
+    [-20, null],
+    [99999, 'sleep 5.000 2>/dev/null || sleep 5'],
+    ['bogus', null],
+  ]) {
+    const transport = makeTransport();
+    const config = value === undefined ? CFG : { ...CFG, send: { enterDelayMs: value } };
+    const { service } = makeService(transport, { config });
+    transport.state.send = sendRecords({ cursorLine: '$ ' });
+    await service.send({ uri: ref(), text: 'x', enter: true });
+    const mutating = transport.calls.filter((call) => call.mutating);
+    assert.equal(mutating.length, 1);
+    const script = mutating[0].script;
+    if (expected === null) {
+      // Only the post-Enter settling wait remains; there is no inter-step pause.
+      assert.equal(script.includes('sleep 0.400'), false, `delay ${value}`);
+      assert.equal(script.includes('sleep 1.500'), false, `delay ${value}`);
+      assert.equal(script.includes('sleep 5.000'), false, `delay ${value}`);
+    } else {
+      assert.ok(script.includes(expected), `delay ${value}: ${expected}`);
+      // The delay sits between the text queue and the Enter queue.
+      assert.ok(script.indexOf(expected) > script.indexOf('send-keys -t \"%7\" -H'));
+      assert.ok(script.indexOf(expected) < script.indexOf('Enter ; display-message'));
+    }
+    // The settling wait before the cursor read is always present.
+    assert.ok(script.includes('sleep 0.300 2>/dev/null || sleep 1'));
+  }
 });

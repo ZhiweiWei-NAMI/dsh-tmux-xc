@@ -111,9 +111,14 @@ test('inventory framing, fields, missing-server classification and UTF-8 invocat
 test('RV1-04: every invocation binds its guard and actions to one synchronous tmux client', () => {
   for (const raw of builders().slice(4)) {
     const script = readable(raw);
-    // Detach enumerates once, then guards each per-client mutation separately.
+    // Detach enumerates once then guards each client; send uses one guarded
+    // client for text/keys, a second for Enter and two read-only cursor probes.
     const invocations = raw.split('\n').filter((line) => line.includes('tmux -u '));
-    assert.equal(invocations.length, raw.includes('list-clients') ? 2 : 1);
+    const enterStep = raw.includes('enterfail');
+    const textStep = raw.includes('-H 68');
+    const expected = raw.includes('list-clients') ? 2
+      : enterStep && textStep ? 4 : enterStep ? 3 : 1;
+    assert.equal(invocations.length, expected);
     for (const invocation of invocations) {
       const queue = readable(invocation);
       assert.ok(queue.includes(`#{==:#{pid}-#{start_time},${GEN}}`));
@@ -162,7 +167,7 @@ test('RV1-02: send atomically refuses synchronization, copy mode, dead and input
 });
 
 test('RV1-08: send success marker follows all queued actions and failure stops at checked status', () => {
-  const script = readable(sendScript(NONCE, SOCKET, EXPECT));
+  const script = readable(sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'] }));
   assert.ok(script.includes(' ; display-message -p'));
   assert.ok(script.includes(`XC1${NONCE}\x1fguarded`));
   assert.ok(script.includes(`XC1${NONCE}\x1fok`));
@@ -218,7 +223,7 @@ test('create rejects invalid names, dimensions, orientation and argv', () => {
   assert.ok(readable(createWindowScript(NONCE, SOCKET, EXPECT, { name: 'logs' })).includes('new-window -d -t "$3" -n "logs"'));
 });
 
-test('hex chunks stay at most 256 bytes in a single command queue, followed by keys and Enter', () => {
+test('hex chunks stay at most 256 bytes in one command queue, followed by keys but not Enter', () => {
   const hex = Array.from({ length: 700 }, (_, i) => (i % 256).toString(16).padStart(2, '0'));
   const script = readable(sendScript(NONCE, SOCKET, EXPECT, { hex, keys: ['C-c', 'Tab'], enter: true }));
   const chunks = [...script.matchAll(/send-keys -t "%7" -H ((?:[0-9a-f]{2} ?)+)/g)]
@@ -227,7 +232,10 @@ test('hex chunks stay at most 256 bytes in a single command queue, followed by k
   assert.deepEqual(chunks.flat(), hex);
   assert.ok(script.includes('send-keys -t "%7" "C-c"'));
   assert.ok(script.includes('send-keys -t "%7" "Tab"'));
-  assert.ok(script.includes('send-keys -t "%7" Enter'));
+  // C5: Enter is a separate guarded invocation, after the remote delay.
+  const firstQueueEnd = script.indexOf('\n', script.indexOf('XC1' + NONCE + '\x1fok'));
+  assert.ok(script.indexOf('send-keys -t "%7" Enter') > firstQueueEnd);
+  assert.ok(script.indexOf('sleep 0.400') < script.indexOf('send-keys -t "%7" Enter'));
 });
 
 test('send validation and payload literalness stay strict', () => {
@@ -334,4 +342,103 @@ test('hostile configured command argv remains quoted, not raw shell code', () =>
   assert.ok(script.includes("'bash -c '\\''echo pwned'\\'''"));
   assert.ok(script.includes("'$(id)'"));
   assert.ok(script.includes("'`whoami`'"));
+});
+
+test('C5: text and Enter are two guarded invocations with a clamped remote delay', () => {
+  for (const [delay, expected] of [
+    [undefined, 'sleep 0.400 2>/dev/null || sleep 1'],
+    [0, null],
+    [120, 'sleep 0.120 2>/dev/null || sleep 1'],
+    [5000, 'sleep 5.000 2>/dev/null || sleep 5'],
+    [-1, null],
+    [9000, 'sleep 5.000 2>/dev/null || sleep 5'],
+    ['250', 'sleep 0.250 2>/dev/null || sleep 1'],
+  ]) {
+    const raw = sendScript(NONCE, SOCKET, EXPECT, {
+      hex: ['68', '69'], enter: true, ...(delay === undefined ? {} : { enterDelayMs: delay }),
+    });
+    const script = readable(raw);
+    const queues = raw.split('\n').filter((line) => line.includes('tmux -u '));
+    // Text queue, Enter queue, cursor_y probe and row capture: all guarded.
+    assert.equal(queues.length, 4);
+    for (const queue of queues) {
+      assert.ok(readable(queue).includes(`#{==:#{pid}-#{start_time},${GEN}}`), 'generation guard');
+      assert.ok(readable(queue).includes('#{==:#{pane_id},%7}'), 'pane ancestry guard');
+    }
+    assert.ok(script.includes('send-keys -t "%7" -H 68 69'));
+    assert.ok(script.includes('send-keys -t "%7" Enter'));
+    assert.ok(script.indexOf('send-keys -t "%7" Enter') > script.indexOf('send-keys -t "%7" -H 68 69'));
+    if (expected === null) {
+      // 0 (and any invalid value) must not add a second inter-step pause; the
+      // only remaining sleep is the fixed post-Enter settling wait.
+      assert.equal(script.includes('sleep 0.400'), false);
+      assert.equal(script.includes('sleep 5.000'), false);
+    } else {
+      // Fractional seconds first, with an integer-second POSIX fallback.
+      assert.ok(script.includes(expected));
+    }
+    assert.ok(script.includes('enterfail'));
+    assert.ok(script.includes('TARGET_CHANGED'));
+    assert.ok(script.includes('SERVER_RESTARTED'));
+  }
+  // Fractional milliseconds are truncated, not rejected; non-numeric input is invalid.
+  assert.ok(readable(sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true, enterDelayMs: 1.5 }))
+    .includes('sleep 0.001'));
+  assertInvalid(() => sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true, enterDelayMs: 'soon' }));
+});
+
+test('C5: the Enter guard failure is a distinct, framed record and stops the cursor probe', () => {
+  const raw = sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true });
+  const script = readable(raw);
+  // The Enter queue names its own refusal and never reuses the generic err head.
+  const enterText = readable(raw).split('\n').find((line) => line.includes('send-keys -t "%7" Enter'));
+  assert.ok(enterText.includes(`XC1${NONCE}\x1fenterfail`));
+  // The Enter queue only carries enterfail/guarded/enter records, never err.
+  assert.equal(enterText.includes(`XC1${NONCE}\x1ferr`), false);
+  assert.ok(enterText.includes('SERVER_RESTARTED'));
+  // The text step's own failure handling stops at a framed err record.
+  assert.ok(script.includes(`XC1${NONCE}\x1ferr`));
+  // A failed Enter sets enter_failed and skips both cursor reads.
+  assert.ok(script.includes('enter_failed=0'));
+  assert.ok(script.includes('enter_failed=1'));
+  assert.ok(script.includes('if [ "$enter_failed" -eq 0 ]; then'));
+  const enterFailure = script.indexOf('enter_failed=1');
+  const cursorProbe = script.indexOf("#{cursor_y}");
+  assert.ok(enterFailure < cursorProbe, 'guard the probe behind the failure flag');
+});
+
+test('C5: enter-only and keys-only keep their shape without a needless delay', () => {
+  const enterOnly = readable(sendScript(NONCE, SOCKET, EXPECT, { enter: true }));
+  assert.ok(enterOnly.includes('send-keys -t "%7" Enter'));
+  // No hex text chunk in an enter-only script (that fragment only exists as a
+  // send-keys flag, which enter-only never uses).
+  assert.equal(enterOnly.includes(' -H '), false);
+  assert.equal(enterOnly.includes('sleep 0.400'), false, 'no inter-step delay for enter-only');
+  const keysOnly = readable(sendScript(NONCE, SOCKET, EXPECT, { keys: ['Tab'] }));
+  assert.ok(keysOnly.includes('send-keys -t "%7" "Tab"'));
+  assert.equal(keysOnly.includes('Enter'), false);
+  assert.equal(keysOnly.includes('#{cursor_y}'), false);
+  const textOnly = readable(sendScript(NONCE, SOCKET, EXPECT, { hex: ['68'] }));
+  assert.equal(textOnly.includes('Enter'), false);
+  assert.equal(textOnly.includes('#{cursor_y}'), false);
+});
+
+test('C5: the cursor-line probe is read-only, bounded and sanitized on the host', () => {
+  const raw = sendScript(NONCE, SOCKET, EXPECT, { hex: ['61'], enter: true });
+  const script = readable(raw);
+  // tmux 3.0a: positive -S/-E are screen-start offsets, so the visible cursor
+  // row is addressed directly; capture stays a bounded single row.
+  assert.ok(script.includes('display-message -p -t "%7" "#{cursor_y}"'));
+  assert.ok(script.includes('capture-pane -p -J -t "%7" -S "$cy" -E "$cy"'));
+  assert.equal(script.includes('capture-pane -p -J -t "%7" -S "$cy" -E "$cy" |'), false);
+  assert.ok(script.includes('head -c 4096'));
+  assert.ok(script.includes('od -An -v -tx1'));
+  const probe = script.slice(script.indexOf('#{cursor_y}'));
+  for (const forbidden of ['kill-', 'set-option', 'set-environment', 'source-file', 'respawn-']) {
+    assert.equal(probe.includes(forbidden), false, forbidden);
+  }
+  assert.ok(script.includes('cursorfail'));
+  assert.ok(script.includes(`XC1${NONCE}\x1fcur`));
+  assert.ok(script.includes(`XC1${NONCE}\x1fcursor`));
+  for (const bad of ["''|*[!0-9]*)"]) assert.ok(script.includes(bad));
 });
