@@ -151,15 +151,20 @@ describe('transport (real ssh)', { skip, timeout: 120000 }, () => {
 /** Transport decorator: counts ssh spawns and aborts the caller's signal shortly after spawn. */
 function abortingTransport({ abortAfterMs = 100 } = {}) {
   let spawns = 0
+  let mutatingSpawns = 0
   let abortHook = () => {}
   return {
+    /** All ssh spawns seen by this wrapper. */
     spawnCount: () => spawns,
+    /** Spawns of scripts flagged `mutating: true` (what "no replay" is about). */
+    mutatingSpawnCount: () => mutatingSpawns,
     setAbortHook(fn) {
       abortHook = fn
     },
     async runRemote(args) {
       const spawnImpl = (argv, opts = {}) => {
         spawns += 1
+        if (args.mutating) mutatingSpawns += 1
         const child = spawn(argv[0], argv.slice(1), {
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
@@ -201,14 +206,14 @@ describe('mutation no-replay', { skip, timeout: 120000 }, () => {
 
       const controller = new AbortController()
       transport.setAbortHook(() => controller.abort())
-      const before = transport.spawnCount()
+      const before = transport.mutatingSpawnCount()
       const err = await rejectsWithCode(
         service.send({ uri: pane.uri, text: 'uncertain', enter: true, signal: controller.signal }),
         CODES.OUTCOME_UNKNOWN,
         'aborted mutation',
       )
       assert.ok(err instanceof XcError)
-      assert.equal(transport.spawnCount() - before, 1, 'mutation spawned exactly once (no replay)')
+      assert.equal(transport.mutatingSpawnCount() - before, 1, 'mutation spawned exactly once (no replay)')
     } finally {
       await service.close?.()
     }
