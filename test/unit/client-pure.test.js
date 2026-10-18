@@ -9,10 +9,56 @@ const pure = globalThis.__dshTmuxXcPure;
 
 test('client-pure: pure builders are exported for Node evaluation', () => {
   assert.ok(pure, 'globalThis.__dshTmuxXcPure should be defined');
-  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString', 'findInventoryTarget']) {
+  for (const name of ['posixQuote', 'powerShellQuote', 'buildRemoteAttachCommand', 'attachCommandPosix', 'attachCommandPowerShell', 'killConfirmString', 'findInventoryTarget', 'kindTextFor', 'resourceLabel', 'rowTitle']) {
     assert.equal(typeof pure[name], 'function', `${name} should be a function`);
   }
 });
+
+const displayLocales = {
+  zh: { kindSession: '会话', kindWindow: '窗口', kindPane: '窗格', unknownCommand: '未知命令' },
+  en: { kindSession: 'Session', kindWindow: 'Window', kindPane: 'Pane', unknownCommand: 'unknown command' },
+};
+
+for (const [locale, words] of Object.entries(displayLocales)) {
+  const t = (key) => {
+    assert.ok(Object.hasOwn(words, key), `unexpected translation key: ${key}`);
+    return words[key];
+  };
+
+  test(`kindTextFor: ${locale} kind nouns, not delete actions`, () => {
+    for (const [kind, key] of [['session', 'kindSession'], ['window', 'kindWindow'], ['pane', 'kindPane']]) {
+      assert.equal(pure.kindTextFor(kind, t), words[key]);
+    }
+    assert.equal(pure.kindTextFor('unknown', t), '');
+  });
+
+  test(`resourceLabel: ${locale} same-command panes have distinct indexed titles without stable ids`, () => {
+    const panes = [0, 1].map((index) => ({ index, cmd: 'bash', pid: 77 + index, sid: 33, wid: 55, uri: 'internal-uri' }));
+    const labels = panes.map((pane) => pure.resourceLabel('pane', pane, t));
+    assert.deepEqual(labels, [`${words.kindPane} 0 · bash`, `${words.kindPane} 1 · bash`]);
+    for (const label of labels) assert.doesNotMatch(label, /[$@%]|33|55|77|78|internal-uri/);
+    assert.equal(pure.resourceLabel('pane', { index: 2, cmd: '' }, t), `${words.kindPane} 2 · ${words.unknownCommand}`);
+    assert.equal(pure.resourceLabel('pane', { pid: 77, cmd: 'bash' }, t), `${words.kindPane} ? · bash`);
+  });
+
+  test(`resourceLabel: ${locale} windows use display indices and names`, () => {
+    assert.equal(pure.resourceLabel('window', { index: 0, name: 'shell', wid: 55 }, t), '0: shell');
+    assert.equal(pure.resourceLabel('window', { index: 1, name: 'logs', wid: 56 }, t), '1: logs');
+    assert.equal(pure.resourceLabel('session', { name: 'task', sid: 33 }, t), 'task');
+  });
+
+  test(`rowTitle: ${locale} alias wins without replacing the underlying row label`, () => {
+    for (const [kind, source] of [['pane', { index: 0, cmd: 'bash' }], ['window', { index: 1, name: 'shell' }]]) {
+      const label = pure.resourceLabel(kind, source, t);
+      const node = { kind, label, alias: '  My\u202epane\n alias  ' };
+      assert.equal(pure.rowTitle(node), 'Mypane alias');
+      assert.equal(node.label, label);
+      assert.equal(pure.rowTitle({ ...node, alias: '' }), label);
+      assert.equal(pure.rowTitle({ ...node, alias: 'x'.repeat(50) }), 'x'.repeat(40));
+    }
+    assert.equal(pure.resourceLabel('pane', { index: 0, cmd: 'ba\u202esh\n' }, t), `${words.kindPane} 0 · bash`);
+  });
+}
 
 test('posixQuote single-quotes and escapes embedded quotes', () => {
   assert.equal(pure.posixQuote('abc'), "'abc'");

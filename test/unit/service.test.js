@@ -1214,7 +1214,7 @@ test('RFA: missing or wrong kill acknowledgements never report success or remove
       killUris: [ref({ kind: 'session', wid: null, pid: null })] });
     assert.equal(result.removed, false);
     assert.equal(result.remote[0].code, CODES.OUTCOME_UNKNOWN);
-    assert.equal(result.remote[0].label, 'namilab:default:$3');
+    assert.equal(result.remote[0].label, 'NaMILab · 会话 train');
     assert.equal(registry.version, 0);
     assert.deepEqual(registry.removedHosts(), []);
   }
@@ -1254,14 +1254,14 @@ test('RFA: partial host removal invalidates each successful kill and labels unre
   assert.equal(result.removed, false);
   assert.equal(registry.version, 1, 'successful kill invalidates even without a local purge');
   assert.deepEqual(result.remote.map(({ label, ok }) => ({ label, ok })), [
-    { label: 'namilab:default:$3', ok: true }, { label: 'namilab:default:$4', ok: false },
+    { label: 'NaMILab · 会话 train', ok: true }, { label: 'namilab:default:$4', ok: false },
   ]);
   assert.equal(result.remote[1].code, CODES.HOST_UNREACHABLE);
 });
 
 test('host/remove remote kills every session and removes locally when all succeed', async () => {
   const transport = makeTransport();
-  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 3, pid: 7 }), paneRecord({ sid: 4, pid: 8 })];
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sid: 3, sname: 'rm-sel', pid: 7 }), paneRecord({ sid: 4, sname: 'other', pid: 8 })];
   const { service, registry } = makeService(transport);
   const uri3 = ref({ kind: 'session', sid: 3, wid: null, pid: null });
   const uri4 = ref({ kind: 'session', sid: 4, wid: null, pid: null });
@@ -1269,9 +1269,42 @@ test('host/remove remote kills every session and removes locally when all succee
   const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri3, uri4], confirm: 'namilab' });
   assert.equal(result.removed, true);
   assert.deepEqual(result.remote.map((item) => item.ok), [true, true]);
-  assert.ok(result.remote.every((item) => typeof item.label === 'string'));
+  assert.deepEqual(result.remote.map(({ uri, label }) => ({ uri, label })), [
+    { uri: uri3, label: 'NaMILab · 会话 rm-sel' },
+    { uri: uri4, label: 'NaMILab · 会话 other' },
+  ]);
   assert.deepEqual(registry.removedHosts(), ['namilab']);
   assert.equal((await registry.resourceList({ all: true })).length, 0);
+});
+
+test('host/remove keeps the resolved human label when a destructive guard refuses', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => [hostRecord(), paneRecord({ sname: 'rm-sel' })];
+  transport.state.scriptError = new XcError(CODES.TARGET_CHANGED, 'guard refused');
+  const { service, registry } = makeService(transport);
+  const uri = ref({ kind: 'session', wid: null, pid: null });
+  const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri], confirm: 'namilab' });
+  assert.equal(result.removed, false);
+  assert.deepEqual(result.remote, [{ uri, label: 'NaMILab · 会话 rm-sel', ok: false,
+    code: CODES.TARGET_CHANGED, message: 'guard refused' }]);
+  assert.equal(transport.calls.filter((call) => call.mutating).length, 1);
+  assert.deepEqual(registry.removedHosts(), []);
+});
+
+test('host/remove never borrows the label of a reused session id in a new generation', async () => {
+  const transport = makeTransport();
+  transport.state.inventory = () => {
+    const replacement = paneRecord({ sname: 'different-live-target' });
+    replacement[1] = '9999-9999';
+    return [hostRecord(), replacement];
+  };
+  const { service } = makeService(transport);
+  const uri = ref({ kind: 'session', wid: null, pid: null });
+  const result = await service.removeHost({ host: 'namilab', mode: 'remote', killUris: [uri], confirm: 'namilab' });
+  assert.equal(result.removed, false);
+  assert.equal(result.remote[0].label, 'namilab:default:$3');
+  assert.equal(result.remote[0].code, CODES.SERVER_RESTARTED);
+  assert.equal(transport.calls.some((call) => call.mutating), false);
 });
 
 test('host/remove remote reports an honest per-uri result and stays unremoved on one failure', async () => {
@@ -1287,7 +1320,7 @@ test('host/remove remote reports an honest per-uri result and stays unremoved on
   assert.equal(result.remote[0].ok, true);
   assert.equal(result.remote[1].ok, false);
   assert.equal(result.remote[1].code, CODES.TARGET_GONE);
-  assert.equal(result.remote[0].label, 'namilab:default:$3');
+  assert.equal(result.remote[0].label, 'NaMILab · 会话 train');
   assert.equal(result.remote[1].label, 'namilab:default:$99');
   assert.deepEqual(registry.removedHosts(), []);
   assert.equal((await registry.resourceList({ all: true })).length, 0, 'no local purge on a failed remote removal');
