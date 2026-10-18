@@ -1,3 +1,32 @@
+# Test results — dsh-tmux-xc 0.1.1
+
+Run on **NaMILab** (Linux), 2026-10-18, by the project manager (centralized validation; sub-agents generated code and did not run tests). Same toolchain as 0.1.0 below (DSH 0.2.1-rc.2 in an isolated `DSH_HOME`, tmux 3.0a, OpenSSH 8.2p1 loopback sshd, Node 22.23.2, headless Chromium). The user's live DSH, `~/.ssh`, default tmux server and existing tasks (AC, AeroWorld, the developer pane) were never driven; every destructive check used disposable sessions on dedicated sockets.
+
+| Check | Result |
+|---|---|
+| Unit (`npm test`) | **549 / 549** |
+| Integration, real ssh + tmux 3.0a (`npm run test:integration`) | **33 / 33** (adds `send-submit`: Ink-like raw-mode TUI submits; sticky line → `submission.state: pending`) |
+| Independent reviews (sol-xhigh, not the authors) | RV-A safety/approval: 8 findings; RV-B correctness/navigation/simplicity: 17 findings — all accepted and fixed (astra-high refine), re-validated |
+| Package | `dist/dsh-tmux-xc-0.1.1.tgz`, installed from the tarball into the isolated profile (remove + add), DSH restarted |
+
+## 0.1.1 acceptance evidence
+
+| # | Item | Evidence |
+|---|---|---|
+| 1 | Task-centric tree | GUI: simple mode lists `host → task` rows; single-window/single-pane tasks are one row; multi-pane task lists `窗格 0 · bash`, `窗格 1 · bash`; no `$ @ %` ids, generation or socket in simple mode; all appear in 高级详情. Alias `AC` set from the panel: row title `AC`, remote name `ac-demo` kept as secondary; inventory shows the session registered with `alias: AC` (local). |
+| 2 | Copy-attach commands | Panel copies labelled Bash and PowerShell strings (cmd.exe tooltip: not supported). Executed for a pane target on a disposable server: Bash → client attached to session `task one` (name with a space) with `@1 %1` selected; PowerShell 7.6.7 in both `Standard` and `Legacy` native-argument modes → `@1 %2` selected. Both include `-o ClearAllForwardings=yes`. Windows PowerShell 5.1 + Windows OpenSSH: **not verified**. |
+| 3 | Real delete | GUI 删除会话 dialog shows remote name, host, socket, kind and “all windows/panes and processes end; no files deleted; other sessions unaffected”; one click → only `del-me` disappeared (out-of-band `tmux list-panes` diff). 移除主机: unreachable host offers only plugin-only removal with an explanation; reachable host — only `rm-sel` selected → only `rm-sel` killed (diff), host removed after all kills succeeded, result row `NaMILab ssh loopback · 会话 rm-sel: 已终止`; restored from 高级详情. Unit: invalid batches kill nothing; partial failure keeps the host. |
+| 4 | Workspace/all | No 当前工作区 / 全部 / 已登记 buttons exist; panel always requests all workspaces. |
+| 5 | Registration & visibility | Agent `tmux_xc_adopt` in another chat → the open panel showed the `已采纳` badge 7.3 s after the turn started (version polling, no manual refresh). Plugin create registers in code (badge `已创建`); aliasing registers. |
+| 6 | Approval switch | Default ON (source 默认): agent create → native approval card. Switched OFF in the panel → persisted after page reload (source 面板设置) → agent create ran with no card. Restored ON. Unit: precedence panel > explicit config > legacy per-key > ON; kill follows the switch; approval snapshot enforced even if the switch flips mid-card; DSH asks preserved. |
+| 7 | Font size | A+ ×3 → 15 px; after page reload still 15 px; A− back to 12 px. |
+| 8 | Send / submit | Reproduced the bug on a disposable Claude Code 2.1.302 TUI (API pointed at a dead local port, nothing sent out): a long text + Enter in one tmux invocation stays in the input box. With 0.1.1 the plugin's `send` (922-byte payload, Enter as a second guarded step) was submitted (`submission.state: cleared`) at the default 400 ms and even at 0 ms. Result separates `delivered` from `submission`; guard refusal of the text step stops before Enter; unknown Enter outcome is reported as unknown. |
+| 9 | One-click navigation | With the sidebar closed, clicking the tmux chip in a sent message opened the tmux panel, selected and highlighted exactly the `ac-demo` pane and showed a read-only snapshot containing the marker (`只读快照，不是交互终端`). After restarting the tmux server with a look-alike `ac-demo` `%0`, the same chip showed `引用已失效：tmux 服务已重启`, selected nothing and showed no look-alike content. |
+
+Not verified: Windows DSH desktop and Windows PowerShell 5.1/OpenSSH (user); the real `NaMILab` alias from Windows; tmux other than 3.0a; DSH other than 0.2.1-rc.2; hot reload (not supported).
+
+---
+
 # Test results — dsh-tmux-xc 0.1.0
 
 Run on **NaMILab** (Linux, hostname `nami-SYS-4029GP-TRT`), 2026-10-17, by the project manager (centralized validation; sub-agents did not run tests). Windows desktop verification is left to the user (see [INSTALL.zh-CN.md](INSTALL.zh-CN.md)).
