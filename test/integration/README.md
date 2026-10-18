@@ -47,16 +47,18 @@ service under test.
 
 | file | covers |
 |------|--------|
-| `transport.test.mjs` | no-server inventory (`noserver` record and `server:null`), `ClearAllForwardings` with a conflicting `LocalForward`, `SSH_HOSTKEY`, fast `HOST_UNREACHABLE`, abort → `CANCELLED`, argv safety (`BatchMode=yes`, `ClearAllForwardings=yes`, never `StrictHostKeyChecking=no`), and no-replay: a mutating `send` aborted right after spawn → `OUTCOME_UNKNOWN` with exactly one spawn observed. |
+| `transport.test.mjs` | no-server inventory (`noserver` record and `server:null`), `ClearAllForwardings` with a conflicting `LocalForward`, `SSH_HOSTKEY`, fast `HOST_UNREACHABLE`, abort → `CANCELLED`, argv safety (`BatchMode=yes`, `ClearAllForwardings=yes`, never `StrictHostKeyChecking=no`), and no-replay: a mutating `send` aborted just after writing its script → `OUTCOME_UNKNOWN` with exactly one mutating spawn observed. The spawn adapter closes stdin and uses a post-write microtask so cancellation cannot race normal completion. |
 | `service.test.mjs` | A1/A5 create + rename (old ref still resolves with new labels), A6 kill + name reuse → `TARGET_GONE`, A7 server restart → `SERVER_RESTARTED`, A13 non-invasive adopt (global/session options, environment, pane content, pane pid unchanged), A3 literal `send` (Unicode, `$(id)`, backticks, quotes) + key allow-list (`C-c` allowed, `rm -rf` → `INVALID_ARGUMENT`), A11 kill confirm / detach keeps the process / forget drops the registry row only, A12 a new service over the same memoryRegistry still resolves the old ref while the process lives. |
 | `hostile.test.mjs` | A9: ANSI colors, OSC 0 title, OSC 52 clipboard, bidi U+202E, C1 bytes, a fake token and a forged `XC1…`/pane title containing `\x1e`/`\x1f`/newline → inventory counts still match the real server (no forged entries), labels sanitized, captured text has no ESC/C1/bidi/NUL, and the fake token is never parsed as a reference. |
-| `concurrency.test.mjs` | A10: two conversations send 20 rounds of 2 concurrent sends each to two different panes; each pane receives only its own strings, exactly once; parallel inventories agree. |
+| `concurrency.test.mjs` | A10: two conversations send 20 rounds of 2 concurrent sends each to two different panes; every marker arrives and neither pane receives the other's strings; parallel inventories agree. PTY and `cat` can both echo a line, so capture counts do not prove exactly-once delivery. |
 
 ## Notes
 
-* `node --test --test-concurrency=1` is the supported mode; each ssh call costs roughly
-  0.2–1 s (the unreachable host waits for its 3 s `ConnectTimeout` once).
-* Timeouts are generous (120–240 s per file) because ssh setup and the `HOST_UNREACHABLE`
-  classification are not instantaneous.
+* `node --test --test-concurrency=1` is the supported mode; each SSH call costs roughly
+  0.2–1 s. Read-only `HOST_UNREACHABLE` failures before `begin` may retry once; a 3 s
+  `ConnectTimeout` is therefore not a whole-scenario budget.
+* Service commands have a 30 s timeout; suite budgets are 120–360 s. The concurrency
+  scenario retains all 40 sends in 20 concurrent pairs: each send resolves afresh and
+  mutates in separate SSH calls (80 roundtrips, plus setup and final inventory).
 * Prerequisites are the installed peer packages (`scripts/dev-link.sh`) only — no new
   dependencies, plain ESM, Node ≥ 22.

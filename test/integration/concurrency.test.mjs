@@ -1,5 +1,5 @@
-// PRD A10: two conversations drive two panes concurrently; no cross-talk and every payload
-// arrives exactly once.
+// PRD A10: two conversations drive two panes concurrently; every payload arrives without
+// cross-talk (pty echo means buffer counts are not delivery counts).
 import assert from 'node:assert/strict'
 import process from 'node:process'
 import { describe, it } from 'node:test'
@@ -7,6 +7,7 @@ import {
   capturePane,
   checkInfra,
   findPaneById,
+  localTmux,
   newCatSession,
   newDetachedSession,
   paneIdOf,
@@ -19,7 +20,9 @@ const ROUNDS = 20
 
 const skip = checkInfra().skip
 
-describe('concurrency (A10)', { skip, timeout: 240000 }, () => {
+// Forty sends require eighty SSH roundtrips (fresh resolve + mutation), plus setup.
+// Only each pair is concurrent; all twenty rounds still run serially.
+describe('concurrency (A10)', { skip, timeout: 360000 }, () => {
   it('20 cross-conversation rounds (2 concurrent sends each) reach only their own pane', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return

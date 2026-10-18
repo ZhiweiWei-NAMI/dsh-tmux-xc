@@ -81,7 +81,7 @@ describe('hostile remote data (A9)', { skip, timeout: 120000 }, () => {
         'no forged session names',
       )
       assert.ok(
-        socket.sessions.every((s) => s.sid > 0 && s.windows.every((w) => w.wid >= 0)),
+        socket.sessions.every((s) => s.sid >= 0 && s.windows.every((w) => w.wid >= 0)),
         'every listed object has real tmux ids',
       )
 
