@@ -1,11 +1,11 @@
 // PRD A10: two conversations drive two panes concurrently; no cross-talk and every payload
 // arrives exactly once.
 import assert from 'node:assert/strict'
+import process from 'node:process'
 import { describe, it } from 'node:test'
 import {
   capturePane,
-  findPaneByPid,
-  localTmux,
+  findPaneById,
   newCatSession,
   newDetachedSession,
   paneIdOf,
@@ -66,11 +66,12 @@ describe('concurrency (A10)', { timeout: 240000 }, () => {
 
       // The service inventory did not mix the two panes up.
       const inv = await service.inventory({})
-      assert.ok(findPaneByPid(inv, 'xc', paneA), 'pane A still present')
-      assert.ok(findPaneByPid(inv, 'xc', paneB), 'pane B still present')
+      assert.ok(findPaneById(inv, 'xc', paneA), 'pane A still present')
+      assert.ok(findPaneById(inv, 'xc', paneB), 'pane B still present')
       assert.equal(
         localTmux(ctx.socketName, 'display-message', '-p', '-t', `%${paneA}`, '#{pane_dead}'),
         '0',
+        'pane A is alive',
       )
     } finally {
       await service.close?.()

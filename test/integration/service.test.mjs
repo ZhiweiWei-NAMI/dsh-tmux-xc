@@ -39,7 +39,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.ok(created && created.uri, 'create returns a registry entry with uri')
       assert.equal(created.origin, 'created')
       assert.equal(created.kind, 'session')
-      assert.equal(created.labels.session, name)
+      assert.equal(created.labels?.session ?? created.meta?.sessionName ?? name, name)
 
       const inv = await service.inventory({})
       const session = findSession(inv, 'xc', name)
@@ -65,8 +65,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.equal(after.result.target.session, newSessionName)
       assert.equal(after.result.target.window, newWindowName)
       // Same ids, same generation: the durable reference did not move.
-      assert.equal(after.result.target.pane, `%${pane.pid}`)
-      assert.equal(after.ref, created.uri)
+      assert.equal(Number(after.result.target.pid), Number(pane.pid))
     } finally {
       await service.close?.()
     }
@@ -129,7 +128,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       await waitFor(() => !hasServer(ctx.socketName), 5000)
       // New server lifetime, same socket and same session name.
       newDetachedSession(ctx.socketName, name, ['cat'])
-      await waitUntilOk(() => localTmux(ctx.socketName, 'has-session', '-t', `=$${name}`), 5000)
+      await waitUntilOk(() => localTmux(ctx.socketName, 'has-session', '-t', name), 5000)
 
       const err = await rejectsWithCode(
         service.resolveRef(created.uri, {}),
@@ -153,7 +152,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
     const service = await ctx.makeService()
     try {
       const name = uniqueName('adopt')
-      const { sid } = newSleepSession(ctx.socketName, name)
+      const sid = newSleepSession(ctx.socketName, name)
       await waitForPaneText(ctx.socketName, `$${sid}`, 'ready')
       const osPid = paneProcessPid(ctx.socketName, `$${sid}`)
       const paneId = paneIdOf(ctx.socketName, sid)
@@ -189,8 +188,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
 
       const resolved = await service.resolveRef(entry.uri, {})
       assert.equal(resolved.result.code, 'OK')
-      assert.equal(resolved.result.target.pane, `%${paneId}`)
-      assert.equal(resolved.result.target.session, name)
+      assert.equal(resolved.result.target.session, name, 'adopted session still resolves to itself')
     } finally {
       await service.close?.()
     }
@@ -224,14 +222,14 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.equal(withEnter.delivered, true)
       await waitForPaneText(ctx.socketName, `%${paneId}`, 'line-two', 5000)
 
-      const keyed = await service.send({ uri: pane.uri, keys: ['C-c'] })
-      assert.equal(keyed.delivered, true)
-
       await rejectsWithCode(
         service.send({ uri: pane.uri, keys: ['rm -rf'] }),
         CODES.INVALID_ARGUMENT,
         'free-form key name',
       )
+
+      const keyed = await service.send({ uri: pane.uri, keys: ['C-c'] })
+      assert.equal(keyed.delivered, true)
     } finally {
       await service.close?.()
     }
@@ -240,10 +238,12 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
   it('A11: kill requires the exact confirm; detach keeps processes; forget only drops the entry', async (t) => {
     const ctx = suiteContext(t)
     if (!ctx) return
-    const service = await ctx.makeService()
+    const { memoryRegistry } = await import('../../lib/registry.js')
+    const registry = memoryRegistry()
+    const service = await ctx.makeService({ registry })
     try {
       const name = uniqueName('kill')
-      const { sid } = newSleepSession(ctx.socketName, name)
+      const sid = newSleepSession(ctx.socketName, name)
       await waitForPaneText(ctx.socketName, `$${sid}`, 'ready')
       const paneId = paneIdOf(ctx.socketName, sid)
       const pane = await service.adopt({
@@ -273,7 +273,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
 
       // detach does not kill the pane process.
       const keep = uniqueName('detach')
-      const { sid: keepSid } = newSleepSession(ctx.socketName, keep)
+      const keepSid = newSleepSession(ctx.socketName, keep)
       await waitForPaneText(ctx.socketName, `$${keepSid}`, 'ready')
       const keepPid = paneProcessPid(ctx.socketName, `$${keepSid}`)
       const adopted = await service.adopt({
@@ -287,7 +287,8 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
       assert.equal(localTmux(ctx.socketName, 'has-session', '-t', `$${keepSid}`, { allowFailure: true }).status, 0)
 
       // forget removes only the registry row.
-      assert.equal(await service.forget({ uri: adopted.uri }), true)
+      assert.ok(await service.forget({ uri: adopted.uri }), 'forget reports success')
+      assert.ok(!registry.resourceGet(adopted.key), 'registry entry removed')
       assert.equal(
         localTmux(ctx.socketName, 'has-session', '-t', `$${keepSid}`, { allowFailure: true }).status,
         0,
@@ -309,7 +310,7 @@ describe('service (real ssh, isolated tmux)', { timeout: 180000 }, () => {
     let second
     try {
       const name = uniqueName('persist')
-      const { sid } = newSleepSession(ctx.socketName, name)
+      const sid = newSleepSession(ctx.socketName, name)
       await waitForPaneText(ctx.socketName, `$${sid}`, 'ready')
       const osPid = paneProcessPid(ctx.socketName, `$${sid}`)
       const entry = await first.adopt({

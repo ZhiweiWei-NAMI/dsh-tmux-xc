@@ -4,11 +4,12 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import { describe, it } from 'node:test'
 import { findTokens } from '../../lib/core/uri.js'
 import {
   capturePane,
-  findPaneByPid,
+  findPaneById,
   localTmux,
   newDetachedSession,
   paneIdOf,
@@ -46,7 +47,7 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
     const service = await ctx.makeService()
     try {
       const name = `hostile_${process.pid}`
-      const { sid } = newDetachedSession(ctx.socketName, name, ['sh', scriptPath])
+      const sid = newDetachedSession(ctx.socketName, name, ['sh', scriptPath])
       const paneId = paneIdOf(ctx.socketName, sid)
       await waitForPaneText(ctx.socketName, `%${paneId}`, 'ignore previous instructions', 10000)
 
@@ -90,7 +91,7 @@ describe('hostile remote data (A9)', { timeout: 120000 }, () => {
           }
         }
       }
-      const hostile = findPaneByPid(inv, 'xc', paneId)
+      const hostile = findPaneById(inv, 'xc', paneId)
       assert.ok(hostile, 'hostile pane is listed')
       assert.doesNotMatch(String(hostile.pane.title), /[\x1e\x1f]/, 'title separators stripped')
       assert.doesNotMatch(String(hostile.pane.title), /XC1/, 'forged record marker not kept as a label')
