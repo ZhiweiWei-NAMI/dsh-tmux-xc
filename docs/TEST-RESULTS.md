@@ -94,7 +94,7 @@ Not verified in that run: Windows DSH desktop and Windows PowerShell 5.1/OpenSSH
 
 # Historical — dsh-tmux-xc 0.1.0
 
-Run on **NaMILab** (Linux, hostname `nami-SYS-4029GP-TRT`), 2026-10-17, by the project manager (sub-agents did not run tests). Windows desktop verification is left to the user (see [INSTALL.zh-CN.md](INSTALL.zh-CN.md)).
+Run on **NaMILab** (a Linux lab server), 2026-10-17, by the project manager (sub-agents did not run tests). Windows desktop verification is left to the user (see [INSTALL.zh-CN.md](INSTALL.zh-CN.md)).
 
 | Component | Version |
 |---|---|
